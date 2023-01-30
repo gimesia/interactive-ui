@@ -9,22 +9,24 @@ class Cluster():
     def __init__(self, clustername: str, color):
         self.name = clustername
         self.color = color
-        self.checked = False
+        self.checked = True
         self.contours = []
         self.disabled_contours = []
-        self.on_checked_changed = None
+        self.on_checked_changed = []
 
     def subscribe_on_checked_changed_event(self, func):
         self.on_checked_changed.append(func)
 
-    def set_checked_state(self):
-        self.checked = not self.checked
-        if self.on_checked_changed is not None:
-            self.on_checked_changed(self)
+    def toggle_checked_state(self, payload, name):
+        print(f"{name} was toggled: {payload}")
+        print(f"checked: {self.checked}")
+        self.checked = payload
+        print(f"checked: {self.checked}")
+        for func in self.on_checked_changed:
+            func()
 
     def get_all_contours(self):
-        a = np.concat(self.contours, self.disabled_contours)
-        return a
+        return np.concat(self.contours, self.disabled_contours)
 
     def disable_contour(self, index: int):
         print(f"Disabling contour at index #{index}")
@@ -37,6 +39,7 @@ class Cluster():
 
 class ImageWindow():
     def __init__(self):
+        self.window = "Interactive UI"
         self.clusters: list[Cluster] = []
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
@@ -45,42 +48,55 @@ class ImageWindow():
         self.block_size_on_changed = []
         self.c_value_on_changed = []
         self.on_sliders_changed = []
+        self.edit = False
 
-        self.window = None
-
-        self.subscribe_sliders_changed_event(self.calculate_adaptive_th)
-        self.subscribe_sliders_changed_event(self.refresh_img)
+        self.subscribe_trackbar_changed_event(self.calculate_adaptive_th)
+        self.subscribe_trackbar_changed_event(self.refresh_img)
 
     def open_window(self):
-        self.window = 'Interactive UI'
         cv.namedWindow(self.window)
         cv.imshow(self.window, self.contour_img)
         cv.displayOverlay(
-            self.window, "PRESS CTRL + P to modify shown clusters")
+            self.window, "PRESS CTRL + P to open ")
         # Sliders
         cv.createTrackbar('Block size:', self.window,
                           self.block_size, 255, self.set_block_size)
         cv.createTrackbar('C value:', self.window,
                           self.c_val, 255, self.set_c_value)
 
-        cv.createButton('c1', button_callback, None, cv.QT_CHECKBOX, 1),
-        cv.createButton('c2', button_callback, None, cv.QT_CHECKBOX, 2),
-        cv.createButton('c3', button_callback, None, cv.QT_CHECKBOX, 3),
-        cv.createButton('c4', button_callback, None, cv.QT_CHECKBOX, 4),
+        # Has to be dynamic, needs to follow number of clusters
+        cv.createButton(
+            "c1", self.clusters[0].toggle_checked_state, "c1", cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, 1),
+        cv.createButton(
+            "c2", self.clusters[1].toggle_checked_state, "c2", cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, 1),
+        cv.createButton(
+            "c3", self.clusters[2].toggle_checked_state, "c3", cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, 1),
+        cv.createButton(
+            "c4", self.clusters[3].toggle_checked_state, "c4", cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, 1),
+
+        # create a push button in a new row
+        cv.createButton("button6", callbackButton, None,
+                        cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR)
 
         cv.setMouseCallback(self.window, self.on_click)
 
-        cv.waitKey(0)
-        cv.destroyAllWindows()
+        # Only close when ESC is pressed
+        while True:
+            k = cv.waitKey(0) & 0xFF
+            if k == 27:
+                cv.destroyAllWindows()
+                break
 
     def set_base_image(self, img: np.ndarray):
         self.og_img = img.copy()
         self.contour_img = img.copy()
 
-    def subscribe_sliders_changed_event(self, func):
+    def subscribe_trackbar_changed_event(self, func):
         self.on_sliders_changed.append(func)
 
-    def sliders_changed(self):
+    def trackbar_changed(self):
+        """Fires stored functions when a trackbar changes value
+        """
         print(f"@ Sliders changed")
         for function in self.on_sliders_changed:
             function()
@@ -94,7 +110,7 @@ class ImageWindow():
 
         print(f"@ Block size set to: {val}")
         self.block_size = val
-        self.sliders_changed()
+        self.trackbar_changed()
 
     def set_c_value(self, val: int):
         if val < 1:
@@ -102,9 +118,14 @@ class ImageWindow():
 
         print(f"@ C value set to: {val}")
         self.c_val = val
-        self.sliders_changed()
+        self.trackbar_changed()
 
     def calculate_adaptive_th(self):
+        """Calculates the adaptive threshold and clusters for the src image with the selected C and Blocksize values
+
+        Returns:
+            np.ndarray: array of contours
+        """
         print("Calculating new adaptive threshold")
 
         gray_img = cv.cvtColor(self.og_img, cv.COLOR_BGR2GRAY)
@@ -115,16 +136,23 @@ class ImageWindow():
 
         # Divide found contours into clusters
         self.clusters = devide_contours_into_clusters(contours)
+        for cl in self.clusters:
+            cl.subscribe_on_checked_changed_event(self.refresh_img)
 
         return contours
 
     def refresh_img(self):
+        """Draws contours again on original image, according to the given parameters
+        """
         print("Refreshing displayed img")
         self.contour_img = self.og_img.copy()
 
         # Drawing contours for clusters
         for cluster in self.clusters:
-            # if not cluster.checked: continue
+            print(f"{cluster.checked}")
+            print(f"{cluster.name} is turned {'on' if cluster.checked else 'off'}")
+            if not cluster.checked:
+                continue  # Exits iteration if cluster is not checked
             cv.drawContours(self.contour_img, cluster.contours, -1,
                             color=cluster.color, thickness=-1, lineType=cv.LINE_8)
             cv.drawContours(self.contour_img, cluster.disabled_contours, -1,
@@ -132,20 +160,31 @@ class ImageWindow():
 
         cv.imshow(self.window, self.contour_img)
 
-    def on_click(self, event, x, y, flags, param):
+    def on_click(self, event, x: int, y: int, *args):
+        """Mouse event listener with all the respective actions to be listened to (click, dblclick, hover, etc.)
+
+        Args:
+            event (str): type of the mouse event
+            x (int): x coord
+            y (int): y coord
+        """
+
         if event == cv.EVENT_LBUTTONDOWN:
             print(f"@ Mouse click at {(x,y)}")
-            poly_test((x, y), self.clusters)
+            find_cluster_for_point((x, y), self.clusters)
             self.refresh_img()
 
 
-# TODO: rethink
-def button_callback(*args):
-    print(f"Button clicked: {args}")
+def find_cluster_for_point(point: "tuple[int,int]", clusters: "list[Cluster]"):
+    """Checks whether given point is in any of the given clusters' objects
 
-
-def poly_test(point: "tuple[int,int]", clusters: "list[Cluster]"):
+    Args:
+        point (tuple[int,int]): coordinates of point
+        clusters (list[Cluster]): clusters to be searched in
+    """
     for cl in clusters:
+        if not cl.checked:
+            continue
         for j, cont in enumerate(cl.contours):
             if int(cv.pointPolygonTest(cont, point, False)) >= 0:
                 print(f"{cl.name} cluster's #{j} element")
@@ -157,7 +196,16 @@ def poly_test(point: "tuple[int,int]", clusters: "list[Cluster]"):
                 cl.enable_contour(j)
 
 
-def devide_contours_into_clusters(contours):
+# TODO make it dynamic somehow (hardcoded clusters => bad)
+def devide_contours_into_clusters(contours) -> "list[Cluster]":
+    """Classifies polygons into clusters based on size
+
+    Args:
+        contours (_type_): polygons
+
+    Returns:
+        list[Cluster]: clusters
+    """
     print("Sorting contours (by area)")
 
     clusters = [Cluster("c1", (244, 133, 66)), Cluster(
@@ -189,13 +237,18 @@ def devide_contours_into_clusters(contours):
     return clusters
 
 
+def callbackButton(event, val):
+    print("BUTTON CALLBACK")
+    print(f"Event: {event}")
+    print(f"Value: {val}")
+    print(f"{cv.loadWindowParameters('Interactive UI')}")
+
+
 def opencving():
     """Test of the code
     """
     window = ImageWindow()
-    cluster = Cluster("Test", (0, 0, 255))
-    window.clusters.append(cluster)
-    window.set_base_image(cv.imread("interactive ui\\img\\cells8.tif"))
+    window.set_base_image(cv.imread("img\\cells8.tif"))
     window.open_window()
 
 
