@@ -2,6 +2,7 @@ import numpy as np
 import cv2 as cv
 
 from debounce import debounce
+import terminal_text  # only for debugging
 
 
 class Cluster():
@@ -14,19 +15,6 @@ class Cluster():
         self.checked = True
         self.contours = []
         self.disabled_contours = []
-        self.on_checked_changed = []
-
-    def subscribe_on_checked_changed_event(self, func):
-        self.on_checked_changed.append(func)
-
-    def on_toggle_checked_state(self, payload, name, *args):
-        print(f"args: {args}")
-        print(f"@ {name} was toggled {'on' if payload else 'off'}")
-        print(f"{self.checked}")
-        self.checked = bool(payload)
-        print(f"{self.checked}")
-        for func in self.on_checked_changed:
-            func()
 
     def get_all_contours(self):
         return np.concat(self.contours, self.disabled_contours)
@@ -41,10 +29,9 @@ class Cluster():
 
 
 class ImageWindow():
-    def __init__(self):
+    def __init__(self, img=None):
         self.window = "Interactive UI"
         self.clusters: list[Cluster] = []
-        self.buttons = []
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
         self.block_size = 101
@@ -52,25 +39,18 @@ class ImageWindow():
         self.block_size_on_changed = []
         self.c_value_on_changed = []
         self.on_sliders_changed = []
-        self.edit = False
+        self.edit = True
+        if img is not None:
+            self.set_base_image(img)
 
-        self.subscribe_trackbar_changed_event(self.calculate_adaptive_th)
+        self.subscribe_trackbar_changed_event(self.calculate_clusters)
         self.subscribe_trackbar_changed_event(self.refresh_img)
-
-    def on_toggle_cluster(self, *args):
-        print(f"@ Toggle {args[1]} {args[0]}")
-        index = list(map(lambda x: x.name, self.clusters)).index(args[1])
-        self.clusters[index].checked = args[0]
-        self.refresh_img()
 
     def open_window(self):
         """Opens window with segemented image and controls
         """
         cv.namedWindow(self.window)
         cv.imshow(self.window, self.contour_img)
-
-        self.calculate_adaptive_th()
-        self.refresh_buttons()
 
         cv.displayOverlay(
             self.window, "PRESS CTRL + P to open ")
@@ -82,11 +62,16 @@ class ImageWindow():
                           self.c_val, 255, self.set_c_value)
 
         # Button toggling edit mode
-        cv.createButton("EDIT MODE", self.toggle_edit_mode, "EDIT",
-                        cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR)
+        cv.createButton("EDIT MODE", self.on_toggle_edit_mode, "EDIT",
+                        cv.QT_RADIOBOX | cv.QT_NEW_BUTTONBAR)
+        cv.createButton("SELECT MODE", self.on_toggle_edit_mode,
+                        "SELECT", cv.QT_RADIOBOX)
 
         # mouse event callbacks
-        cv.setMouseCallback(self.window, self.on_click)
+        cv.setMouseCallback(self.window, self.on_mouse_event)
+
+        self.calculate_clusters()
+        self.create_cluster_checkboxes()
 
         # Only close when ESC is pressed
         while True:
@@ -103,7 +88,7 @@ class ImageWindow():
         self.on_sliders_changed.append(func)
 
     def trackbar_changed(self):
-        print(f"@ Sliders changed")
+        terminal_text.event(f"@ Sliders changed")
         for function in self.on_sliders_changed:
             function()
 
@@ -114,7 +99,7 @@ class ImageWindow():
         if val % 2 != 1:
             val += 1
 
-        print(f"@ Block size set to: {val}")
+        terminal_text.event(f"@ Block size set to: {val}")
         self.block_size = val
         self.trackbar_changed()
 
@@ -122,42 +107,34 @@ class ImageWindow():
         if val < 1:
             val = 3
 
-        print(f"@ C value set to: {val}")
+        terminal_text.event(f"@ C value set to: {val}")
         self.c_val = val
         self.trackbar_changed()
 
-    def calculate_adaptive_th(self) -> np.ndarray:
+    def calculate_clusters(self) -> np.ndarray:
         """Calculates the adaptive threshold and clusters for the src image with the selected C and Blocksize values
 
         Returns:
             np.ndarray: array of contours
         """
         print("Calculating new adaptive threshold")
+        vals = list(map(lambda x: x.checked, self.clusters))
+        self.clusters = segmentation(self.og_img, self.block_size, self.c_val)
+        for i, val in enumerate(vals):
+            self.clusters[i].checked = val
+        return self.clusters
 
-        gray_img = cv.cvtColor(self.og_img, cv.COLOR_BGR2GRAY)
-        th = cv.adaptiveThreshold(
-            gray_img, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, self.block_size, self.c_val)
-        contours = cv.findContours(
-            th, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)[0]
-
-        # Divide found contours into clusters
-        self.clusters = devide_contours_into_clusters(contours)
-        for cl in self.clusters:
-            cl.subscribe_on_checked_changed_event(self.refresh_img)
-
-        return contours
-
-    @debounce(0.1)
+    @debounce(0.025)
     def refresh_img(self):
         """Draws contours again on original image, according to the given parameters
         """
-        print("@@ Refreshing displayed img")
+        terminal_text.warn("@ Refreshing displayed img")
         self.contour_img = self.og_img.copy()
 
         # Drawing contours for clusters
         for cluster in self.clusters:
             # print(f"{cluster.checked}")
-            print(f"{cluster.name} is turned {'on' if cluster.checked else 'off'}")
+            # print(f"{cluster.name} is turned {'on' if cluster.checked else 'off'}")
             if not cluster.checked:
                 continue  # Exits iteration if cluster is not checked
             cv.drawContours(self.contour_img, cluster.contours, -1,
@@ -166,24 +143,18 @@ class ImageWindow():
                             color=cluster.color, thickness=1, lineType=cv.LINE_8)
 
         cv.imshow(self.window, self.contour_img)
-        print(self.buttons)
 
-    def refresh_buttons(self):
-        for btn in self.buttons:
-            btn.destroy()
-        for i, cl in enumerate(self.clusters):
-            button = cv.createButton(cl.name, self.on_toggle_cluster, cl.name,
-                                     cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
-            print(button)
-            self.buttons.append(button)
+    def create_cluster_checkboxes(self):
+        for cl in self.clusters:
+            cv.createButton(cl.name, self.on_toggle_cluster, cl.name,
+                            cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
 
-    def toggle_edit_mode(self, *args):
+    def on_toggle_edit_mode(self, *args):
+        terminal_text.event(f"Edit mode: {bool(not self.edit)}")
         self.edit = not self.edit
-        print(f"@ Edit mode {args[0]}")
-        print(f"@ Edit mode {args[1]}")
-        print(f"@ Edit mode {args[2]}")
 
-    def on_click(self, event, x: int, y: int, *args):
+    @debounce(0.05)
+    def on_mouse_event(self, event, x: int, y: int, flags, *args):
         """Mouse event listener with all the respective actions to be listened to (click, dblclick, hover, etc.)
 
         Args:
@@ -191,12 +162,40 @@ class ImageWindow():
             x (int): x coord
             y (int): y coord
         """
+        point = (x, y)
 
-        if event == cv.EVENT_LBUTTONDOWN:
-            print(f"@ Mouse click at {(x,y)}")
-            result = find_cluster_for_point((x, y), self.clusters)
-            if result:
-                self.refresh_img()
+        if self.edit:
+            if event == cv.EVENT_LBUTTONDOWN:
+                terminal_text.event(
+                    f"@ LDblClick at {point} -> Searching for object in displayed clusters")
+                result = find_cluster_for_point(point, self.clusters)
+                if result:
+                    self.refresh_img()
+
+            elif event == cv.EVENT_MBUTTONDOWN:
+                for i, cluster in enumerate(self.clusters):
+                    if not cluster.checked:
+                        continue
+                    for j, contour in enumerate(cluster.contours):
+                        result = int(cv.pointPolygonTest(
+                            contour, point, False)) >= 0
+                        if result:
+                            mod = len(self.clusters)
+                            next_i = (i + 1) % mod
+
+                            terminal_text.event(
+                                f"@ MiddleClick at {point} -> Changing cluster of object from {cluster.name} to {self.clusters[next_i].name}")
+
+                            self.clusters[next_i].contours.append(
+                                cluster.contours.pop(j))
+                            self.refresh_img()
+                            return
+
+    def on_toggle_cluster(self, *args):
+        terminal_text.event(f"@ Toggle {args[1]} {bool(args[0])}")
+        index = list(map(lambda x: x.name, self.clusters)).index(args[1])
+        self.clusters[index].checked = bool(args[0])
+        self.refresh_img()
 
 
 def find_cluster_for_point(point: "tuple[int,int]", clusters: "list[Cluster]") -> bool:
@@ -206,18 +205,19 @@ def find_cluster_for_point(point: "tuple[int,int]", clusters: "list[Cluster]") -
         point (tuple[int,int]): coordinates of point
         clusters (list[Cluster]): clusters to be searched in
     """
-    for cl in clusters:
-        if not cl.checked:
+    print("Findig cluster for point")
+    for cluster in clusters:
+        if not cluster.checked:
             continue
-        for j, cont in enumerate(cl.contours):
-            if int(cv.pointPolygonTest(cont, point, False)) >= 0:
-                print(f"{cl.name} cluster's #{j} element")
-                cl.disable_contour(j)
+        for j, contour in enumerate(cluster.contours):
+            if int(cv.pointPolygonTest(contour, point, False)) >= 0:
+                print(f"{cluster.name} cluster's #{j} element")
+                cluster.disable_contour(j)
                 return True
-        for j, cont in enumerate(cl.disabled_contours):
-            if int(cv.pointPolygonTest(cont, point, False)) >= 0:
-                print(f"{cl.name} cluster's #{j} element")
-                cl.enable_contour(j)
+        for j, contour in enumerate(cluster.disabled_contours):
+            if int(cv.pointPolygonTest(contour, point, False)) >= 0:
+                print(f"{cluster.name} cluster's #{j} element")
+                cluster.enable_contour(j)
                 return True
     return False
 
@@ -234,6 +234,7 @@ def devide_contours_into_clusters(contours) -> "list[Cluster]":
     """
     print("Sorting contours (by area)")
 
+    # NOTE: hardcoded clusters!
     clusters = [Cluster("c1", (244, 133, 66)), Cluster(
         "c2", (83, 168, 52)), Cluster("c3", (5, 188, 251)), Cluster("c4", (53, 67, 234))]
 
@@ -263,15 +264,19 @@ def devide_contours_into_clusters(contours) -> "list[Cluster]":
     return clusters
 
 
-def segmentation():
-    return
+def segmentation(img: np.ndarray, block_size, c_val):
+    gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    th = cv.adaptiveThreshold(
+        gray_img, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, block_size, c_val)
+    contours = cv.findContours(
+        th, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)[0]
+    return devide_contours_into_clusters(contours)
 
 
 def opencving():
     """Test of the code
     """
-    window = ImageWindow()
-    window.set_base_image(cv.imread("img\\cells8.tif"))
+    window = ImageWindow(cv.imread("img\\cells8.tif"))
     window.open_window()
 
 
