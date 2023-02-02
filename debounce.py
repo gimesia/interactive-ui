@@ -1,5 +1,3 @@
-import unittest
-import time
 from threading import Timer
 
 
@@ -21,21 +19,19 @@ def debounce(wait):
     return decorator
 
 
-count = 0
-
-
-@debounce(0.5)
-def increment():
-    global count
-    """ Simple function that
-        increments a counter when
-        called, used to test the
-        debounce function decorator """
-    count += 1
-    print(count)
-
-
 if __name__ == '__main__':
+    count = 0
+
+    @debounce(0.5)
+    def increment():
+        global count
+        """ Simple function that
+            increments a counter when
+            called, used to test the
+            debounce function decorator """
+        count += 1
+        print(count)
+
     while (True):
         a = input()
         increment()
