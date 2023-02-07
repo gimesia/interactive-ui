@@ -61,7 +61,7 @@ class ImageWindow():
         self.c_value_on_changed = []
         self.on_trackbar_changed = []
         self.edit = False
-        self.select = True
+        self.select = False
         self.selected = None
         if img is not None:
             self.set_base_image(img)
@@ -194,8 +194,22 @@ class ImageWindow():
                             cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
 
     def print_data(self, *args):
-        print(f"{args}")
-        print(self.data)
+        print(self.extract_data())
+
+    def extract_data(self, disableds=False):
+        """Creates dataframe from active contours of the clusters
+
+        Returns:
+            pandas.DataFrame: Dataframe with object properties
+        """
+        df = pd.DataFrame({"cluster": [], "index": [], "area": []})
+        for i, cluster in enumerate(self.clusters):
+            if not cluster.checked:
+                continue
+            for j, contour in enumerate(self.clusters[i].contours):
+                df.loc[len(df.index)] = [
+                    cluster.name, j, cv.contourArea(contour)]
+        return df
 
     def on_trackbar_sliders_changed(self):
         terminal_text.event(f"@ Trackbar sliders changed")
@@ -261,19 +275,6 @@ class ImageWindow():
                             return
                 return
 
-    def extract_data(self):
-        """Creates dataframe from active contours of the clusters
-
-        Returns:
-            pandas.DataFrame: Dataframe with object properties
-        """
-        df = pd.DataFrame({"cluster": [], "index": [], "area": []})
-        for i, cluster in enumerate(self.clusters):
-            for j, contour in enumerate(self.clusters[i].contours):
-                df.loc[len(df.index)] = [
-                    cluster.name, j, cv.contourArea(contour)]
-        return df
-
     def on_toggle_edit_mode(self, *args):
         next = not self.edit
         self.edit = next
@@ -283,11 +284,14 @@ class ImageWindow():
 
         # Storing original segmentation results for later comparison
         if self.data is None:
+            terminal_text.event("Storing initial data")
             self.data = self.extract_data()
             # print(self.data)
 
     def on_toggle_select_mode(self, *args):
         next = not self.select
+        if not next:
+            self.refresh_img()
         txt = f"Select mode: {'ON' if next else 'OFF'}"
         self.select = next
         self.timed_overlay_msg(txt, 5)
@@ -358,7 +362,7 @@ def divide_contours_into_clusters(contours) -> "list[Cluster]":
         quarter, mn + (1.5 * quarter), mn + (2.5 * quarter)
 
     for i, cont in enumerate(contours):
-        if areas[i] == 0.0:
+        if areas[i] < 1.0:
             continue
         if areas[i] < c1_limit:
             clusters[0].contours.append(cont)
