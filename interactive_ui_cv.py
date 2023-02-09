@@ -22,6 +22,7 @@ class Cluster():
 
     def disable_contour(self, index: int):
         print(f"Disabling contour at index #{index}")
+        print(f"Disabling contour at index #{index}")
         self.disabled_contours.append(self.contours.pop(index))
 
     def enable_contour(self, index: int):
@@ -38,14 +39,10 @@ class ObjectParams():
     def __str__(self) -> str:
         return f"cluster: {self.cluster}, index: {self.indx}, area: {self.area}"
 
-    def put_params_on_window(self, window, img: np.ndarray, org: "tuple(int, int)", *kwargs):
-        y0, dy = org[1], 25
-        for i, (key, val) in enumerate(self.__dict__.items()):
-            y = y0 + i*dy
-            img = put_text(
-                img, f"{key}: {val}", (org[0], y))
-        cv.imshow(window, img)
-        return img
+    def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs):
+        lines = list(map(lambda x: f"{x[0]}: {x[1]}", self.__dict__.items()))
+        image = put_texbox_on_img(img, lines, (org[0]+10, org[1]))
+        return image
 
 
 class ImageWindow():
@@ -245,13 +242,17 @@ class ImageWindow():
 
     def display_stats(self, *args):
         image = self.contour_img.copy()
+        image = cv.rectangle(
+            image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (0, 0, 0), 3)
+        image = cv.rectangle(
+            image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (225, 225, 225), -1)
         stats = self.extract_stats()
         print(stats)
         start_point = (50, 50)
         for i, cl in enumerate(self.clusters):
             image = put_text(
                 image, f"{cl.name}: {stats[1][i]} ({round(stats[0][i] * 100, 2)}%)", start_point,)
-            start_point = (start_point[0], start_point[1]+30)
+            start_point = (start_point[0], start_point[1] + 30)
         image = put_text(
             image, f"All: {stats[1].sum(dtype=int)}, Disabled: {stats[2]}", start_point)
         cv.imshow(self.window, image)
@@ -299,11 +300,11 @@ class ImageWindow():
             if event == cv.EVENT_LBUTTONDOWN:
                 if obj_params is not None:
                     cl = self.get_claster_by_name(obj_params.cluster)
+                    img = self.contour_img.copy()
+                    img = obj_params.put_params_on_image(img, point)
+                    img = cv.drawContours(img, cl.contours[obj_params.indx], -1,
+                                          color=(0, 0, 0), thickness=-2, lineType=cv.LINE_8)
 
-                    img = cv.drawContours(self.contour_img.copy(), cl.contours[obj_params.indx], -1,
-                                          color=(0, 0, 0), thickness=-1, lineType=cv.LINE_4)
-                    img = obj_params.put_params_on_window(
-                        self.window, img, point)
                 if obj_params is not None:
                     self.timed_statusbar_msg(f"{obj_params.__str__()}")
                     cv.imshow(self.window, img)
@@ -459,6 +460,20 @@ def put_text(img: np.ndarray, text: str, org: "tuple(int, int)", font=cv.FONT_HE
     im = cv.putText(im, text, org, font, fontScale,
                     colors[1], 1, cv.LINE_AA)
     return im
+
+
+def put_texbox_on_img(img, lines: "list[str]", point):
+    image = img.copy()
+    end_point = (point[0] + 200, point[1] + len(lines) * 30)
+    image = cv.rectangle(
+        image, point, end_point, (0, 0, 0), 3)
+    image = cv.rectangle(
+        image, point, end_point, (225, 225, 225), -1)
+    point = (point[0] + 10, point[1] + 20)
+    for line in lines:
+        image = put_text(image, str(line), point)
+        point = (point[0], point[1] + 30)
+    return image
 
 
 def opencving():
