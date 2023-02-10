@@ -21,27 +21,25 @@ class Cluster():
         return np.concat(self.contours, self.disabled_contours)
 
     def disable_contour(self, index: int):
-        print(f"Disabling contour at index #{index}")
-        print(f"Disabling contour at index #{index}")
         self.disabled_contours.append(self.contours.pop(index))
 
     def enable_contour(self, index: int):
-        print(f"Enabling contour at index #{index}")
         self.contours.append(self.disabled_contours.pop(index))
 
 
 class ObjectParams():
-    def __init__(self, cluster_name, i, area):
+    def __init__(self, cluster_name, i, area, disabled):
         self.cluster = cluster_name
         self.indx = i
         self.area = area
+        self.disabled = disabled
 
     def __str__(self) -> str:
-        return f"cluster: {self.cluster}, index: {self.indx}, area: {self.area}"
+        return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}, index: {self.indx}, area: {self.area}"
 
     def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs):
         lines = list(map(lambda x: f"{x[0]}: {x[1]}", self.__dict__.items()))
-        image = put_texbox_on_img(img, lines, (org[0]+10, org[1]))
+        image = put_textbox_on_img(img, lines, (org[0]+10, org[1]))
         return image
 
 
@@ -57,7 +55,7 @@ class ImageWindow():
         self.block_size_on_changed = []
         self.c_value_on_changed = []
         self.on_trackbar_changed = []
-        self.edit = False
+        self.edit = True
         self.preview = True
         self.select = False
         if img is not None:
@@ -94,16 +92,13 @@ class ImageWindow():
         cv.namedWindow(self.window)
         cv.imshow(self.window, self.contour_img)
 
-        # self.timed_overlay("PRESS CTRL + P to open properties window", 10)
-        # cv.displayOverlay(self.window, )
-
         # Sliders
         cv.createTrackbar('Block size:', self.window,
                           self.block_size, 255, self.set_block_size)
         cv.createTrackbar('C value:', self.window,
                           self.c_val, 255, self.set_c_value)
 
-        # mouse event callbacks
+        # Mouse event callbacks
         cv.setMouseCallback(self.window, self.on_mouse_event)
 
         # Finding clusters
@@ -117,12 +112,12 @@ class ImageWindow():
         self.create_cluster_checkboxes()
         cv.createButton("EN/DISABLE ALL", self.disable_all, "ALL",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
-        cv.createButton("DISPLAY DATA", self.display_stats, "DISPLAY",
+        cv.createButton("DISPLAY STATS", self.display_stats, "DISPLAY",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
-        cv.createButton("PRINT DATA", self.print_data, "print",
+        cv.createButton("SAVE DATA", self.save_data, "print",
                         cv.QT_PUSH_BUTTON)
 
-        # Only close when ESC is pressed
+        # Close when ESC is pressed
         while True:
             k = cv.waitKey(0) & 0xFF
             if k == 27:
@@ -205,8 +200,12 @@ class ImageWindow():
             cv.createButton(cl.name, self.on_toggle_cluster, cl.name,
                             cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
 
-    def print_data(self, *args):
-        print(self.extract_data())
+    def save_data(self, *args):
+        self.timed_overlay_msg("Saving results", 3)
+        modified_data = self.extract_data()
+        og_data = self.data
+        modified_data.to_csv("modified_data.csv")
+        og_data.to_csv("og_data.csv")
 
     def extract_data(self, disableds=False):
         """Creates dataframe from active contours of the clusters
@@ -237,24 +236,23 @@ class ImageWindow():
         disableds = np.sum(np.asarray(
             list(map(lambda x: len(x.disabled_contours), self.clusters))))
         all = np.sum(lengths)
-        print(lengths/all)
         return (lengths/all, lengths, disableds)
 
     def display_stats(self, *args):
         image = self.contour_img.copy()
-        image = cv.rectangle(
+        """        image = cv.rectangle(
             image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (0, 0, 0), 3)
         image = cv.rectangle(
-            image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (225, 225, 225), -1)
+            image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (225, 225, 225), -1)"""
         stats = self.extract_stats()
-        print(stats)
-        start_point = (50, 50)
+        lines = []
+        lines.append(
+            f"All: {stats[1].sum(dtype=int)}, Disabled: {stats[2]}")
         for i, cl in enumerate(self.clusters):
-            image = put_text(
-                image, f"{cl.name}: {stats[1][i]} ({round(stats[0][i] * 100, 2)}%)", start_point,)
-            start_point = (start_point[0], start_point[1] + 30)
-        image = put_text(
-            image, f"All: {stats[1].sum(dtype=int)}, Disabled: {stats[2]}", start_point)
+            lines.append(
+                f"{cl.name}: {stats[1][i]} ({round(stats[0][i] * 100, 2)}%)")
+
+        image = put_textbox_on_img(image, lines, (25, 25))
         cv.imshow(self.window, image)
 
     def on_toggle_mode(self, val, mode):
@@ -317,6 +315,7 @@ class ImageWindow():
             if event == cv.EVENT_LBUTTONDOWN and not self.select:
                 result = find_object_for_point(point, self.clusters, True)
                 if result:
+                    self.timed_statusbar_msg(f"{result.__str__()}")
                     self.refresh_img()
                 return
 
@@ -360,25 +359,27 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
                 # Move to disabled list if disabling is turned on
                 if disable:
-                    print(f"Disabling {cluster.name} cluster's #{j} element")
+                    print(f"Disabling {cluster.name} cluster's #{j} object")
                     cluster.disable_contour(j)
-                return ObjectParams(cluster.name, j, cv.contourArea(contour))
+                    return ObjectParams(cluster.name, j, cv.contourArea(contour), True)
+                return ObjectParams(cluster.name, j, cv.contourArea(contour), False)
 
         for j, contour in enumerate(cluster.disabled_contours):
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
                 # Move to enabled list if disabling is turned on
                 if disable:
-                    print(f"Enabling {cluster.name} cluster's #{j} element")
+                    print(f"Enabling {cluster.name} cluster's #{j} object")
                     cluster.enable_contour(j)
-                return ObjectParams(cluster.name, j, cv.contourArea(contour))
+                    return ObjectParams(cluster.name, j, cv.contourArea(contour), False)
+                return ObjectParams(cluster.name, j, cv.contourArea(contour), True)
     return None
 
 
 # NOTE: This is function should be replace with a more precise classification
-def divide_contours_into_clusters(contours) -> "list[Cluster]":
-    """Classifies polygons into clusters based on size
-
+def divide_contours_into_clusters(contours: np.ndarray, ) -> "list[Cluster]":
+    """Classifies contours (polygons) into clusters given clusters
+        Note: currently based on size
     Args:
         contours (_type_): polygons
 
@@ -386,10 +387,9 @@ def divide_contours_into_clusters(contours) -> "list[Cluster]":
         list[Cluster]: clusters
     """
     print("Sorting contours (by area)")
-
-    # NOTE: hardcoded clusters!
-    clusters = [Cluster("c1", (244, 133, 66)), Cluster(
+    clusters: "list[Cluster]" = [Cluster("c1", (244, 133, 66)), Cluster(
         "c2", (83, 168, 52)), Cluster("c3", (5, 188, 251)), Cluster("c4", (53, 67, 234))]
+    # NOTE: hardcoded clusters!
 
     # List of the areas of countours (matching indices)
     areas = list(map(lambda x: cv.contourArea(x), contours))
@@ -462,9 +462,22 @@ def put_text(img: np.ndarray, text: str, org: "tuple(int, int)", font=cv.FONT_HE
     return im
 
 
-def put_texbox_on_img(img, lines: "list[str]", point):
+def put_textbox_on_img(img, lines: "list[str]", point):
     image = img.copy()
     end_point = (point[0] + 200, point[1] + len(lines) * 30)
+
+    diff = (img.shape[1]-end_point[0], img.shape[0]-end_point[1])
+    print(f"shape: {img.shape}")
+    print(f"start_point: {point}")
+    print(f"end_point: {end_point}")
+    print(f"diff: {diff}")
+    if diff[0] < 0:
+        point = (point[0]+diff[0], point[1])
+        end_point = (end_point[0]+diff[0], end_point[1])
+    if diff[1] < 0:
+        point = (point[0], point[1]+diff[1])
+        end_point = (end_point[0], end_point[1]+diff[1])
+
     image = cv.rectangle(
         image, point, end_point, (0, 0, 0), 3)
     image = cv.rectangle(
@@ -481,10 +494,6 @@ def opencving():
     """
     window = ImageWindow(cv.imread("img\\cells8.tif"))
     window.open_window()
-
-
-def btn(*args):
-    print(args)
 
 
 opencving()
