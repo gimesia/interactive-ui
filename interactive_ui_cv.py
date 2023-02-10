@@ -55,7 +55,7 @@ class ImageWindow():
         self.block_size_on_changed = []
         self.c_value_on_changed = []
         self.on_trackbar_changed = []
-        self.edit = True
+        self.edit = False
         self.preview = True
         self.select = False
         if img is not None:
@@ -132,7 +132,6 @@ class ImageWindow():
         self.timed_statusbar_msg(
             f"Clusters toggled {'on' if self.preview else 'off'}", 2)
         self.refresh_img()
-        print(args, next)
 
     def set_base_image(self, img: np.ndarray):
         self.og_img = img.copy()
@@ -166,7 +165,7 @@ class ImageWindow():
         Returns:
             np.ndarray: array of contours
         """
-        print("Calculating new adaptive threshold")
+        terminal_text.event("Calculating new adaptive threshold")
         checkbox_values = list(map(lambda x: x.checked, self.clusters))
         self.clusters = segmentation(self.og_img, self.block_size, self.c_val)
         for i, val in enumerate(checkbox_values):
@@ -202,10 +201,14 @@ class ImageWindow():
 
     def save_data(self, *args):
         self.timed_overlay_msg("Saving results", 3)
-        modified_data = self.extract_data()
-        og_data = self.data
-        modified_data.to_csv("modified_data.csv")
-        og_data.to_csv("og_data.csv")
+        current_data = self.extract_data()
+        if self.data is None:
+            current_data.to_csv("original_data.csv")
+        else:
+            current_data.to_csv("modified_data.csv")
+            self.data.to_csv("original_data.csv")
+        stats = self.extract_stats()
+        stats.to_csv("stats.csv")
 
     def extract_data(self, disableds=False):
         """Creates dataframe from active contours of the clusters
@@ -228,7 +231,7 @@ class ImageWindow():
                         cluster.name, j, cv.contourArea(contour)]
         return df
 
-    def extract_stats(self, *args):
+    def extract_stats(self, *args) -> pd.DataFrame:
         """Extracts the summary of the clusters' distributions
         """
         lengths = np.asarray(
@@ -236,22 +239,26 @@ class ImageWindow():
         disableds = np.sum(np.asarray(
             list(map(lambda x: len(x.disabled_contours), self.clusters))))
         all = np.sum(lengths)
-        return (lengths/all, lengths, disableds)
+        indexes = list(map(lambda x: x.name, self.clusters))
+
+        frame = {'Count': pd.Series(lengths, index=indexes),
+                 'Percentage': pd.Series((lengths / all) * 100, index=indexes)}
+        df1 = pd.DataFrame(frame, index=indexes)
+        df2 = pd.DataFrame({'Count': [all, disableds], 'Percentage': [
+            100, 0]}, index=['all', 'disabled'])
+        return pd.concat(objs=[df1, df2])
 
     def display_stats(self, *args):
+        """Displays cluster statistics on window
+        """
         image = self.contour_img.copy()
-        """        image = cv.rectangle(
-            image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (0, 0, 0), 3)
-        image = cv.rectangle(
-            image, (40, 30), (230, 60 + (len(self.clusters) * 30)), (225, 225, 225), -1)"""
         stats = self.extract_stats()
-        lines = []
-        lines.append(
-            f"All: {stats[1].sum(dtype=int)}, Disabled: {stats[2]}")
-        for i, cl in enumerate(self.clusters):
-            lines.append(
-                f"{cl.name}: {stats[1][i]} ({round(stats[0][i] * 100, 2)}%)")
 
+        lines = []
+
+        for index, row in stats.iterrows():
+            lines.append(
+                f"{index}: {row['Count']} ({round(row['Percentage'], 2)}%)")
         image = put_textbox_on_img(image, lines, (25, 25))
         cv.imshow(self.window, image)
 
@@ -359,7 +366,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
                 # Move to disabled list if disabling is turned on
                 if disable:
-                    print(f"Disabling {cluster.name} cluster's #{j} object")
+                    terminal_text.event(
+                        f"Disabling {cluster.name} cluster's #{j} object")
                     cluster.disable_contour(j)
                     return ObjectParams(cluster.name, j, cv.contourArea(contour), True)
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), False)
@@ -369,7 +377,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
                 # Move to enabled list if disabling is turned on
                 if disable:
-                    print(f"Enabling {cluster.name} cluster's #{j} object")
+                    terminal_text.event(
+                        f"Enabling {cluster.name} cluster's #{j} object")
                     cluster.enable_contour(j)
                     return ObjectParams(cluster.name, j, cv.contourArea(contour), False)
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), True)
@@ -386,7 +395,6 @@ def divide_contours_into_clusters(contours: np.ndarray, ) -> "list[Cluster]":
     Returns:
         list[Cluster]: clusters
     """
-    print("Sorting contours (by area)")
     clusters: "list[Cluster]" = [Cluster("c1", (244, 133, 66)), Cluster(
         "c2", (83, 168, 52)), Cluster("c3", (5, 188, 251)), Cluster("c4", (53, 67, 234))]
     # NOTE: hardcoded clusters!
@@ -467,10 +475,6 @@ def put_textbox_on_img(img, lines: "list[str]", point):
     end_point = (point[0] + 200, point[1] + len(lines) * 30)
 
     diff = (img.shape[1]-end_point[0], img.shape[0]-end_point[1])
-    print(f"shape: {img.shape}")
-    print(f"start_point: {point}")
-    print(f"end_point: {end_point}")
-    print(f"diff: {diff}")
     if diff[0] < 0:
         point = (point[0]+diff[0], point[1])
         end_point = (end_point[0]+diff[0], end_point[1])
