@@ -1,3 +1,4 @@
+
 import cv2 as cv
 import numpy as np
 import pandas as pd
@@ -38,8 +39,9 @@ class ObjectParams():
         return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}, index: {self.indx}, area: {self.area}"
 
     def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs):
-        lines = list(map(lambda x: f"{x[0]}: {x[1]}", self.__dict__.items()))
-        image = put_textbox_on_img(img, lines, (org[0]+10, org[1]))
+        lines = self.__str__().split(sep=", ")
+        lines.pop(1)
+        image = put_textbox_on_img(img, lines, (org[0] + 10, org[1]), 120)
         return image
 
 
@@ -64,33 +66,10 @@ class ImageWindow():
         self.subscribe_trackbar_changed_event(self.calculate_clusters)
         self.subscribe_trackbar_changed_event(self.refresh_img)
 
-    def timed_overlay_msg(self, text: str, time: int = 0):
-        """Displays overlay for a defined time or permanently
-
-        Args:
-            text (str): Displayed text on overlay
-            time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
-        """
-        cv.displayOverlay(self.window, f"{text}", time * 1000)
-
-    def timed_statusbar_msg(self, text: str, time: int = 0):
-        """Displays overlay for a defined time or permanently
-
-        Args:
-            text (str): Displayed text on overlay
-            time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
-        """
-        cv.displayStatusBar(self.window, f"{text}", time * 1000)
-
-    def get_claster_by_name(self, cluster_name: str) -> Cluster:
-        index = list(map(lambda x: x.name, self.clusters)).index(cluster_name)
-        return self.clusters[index]
-
     def open_window(self):
         """Opens window with segemented image and controls
         """
         cv.namedWindow(self.window)
-        cv.imshow(self.window, self.contour_img)
 
         # Sliders
         cv.createTrackbar('Block size:', self.window,
@@ -116,15 +95,70 @@ class ImageWindow():
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
         cv.createButton("SAVE DATA", self.save_data, "print",
                         cv.QT_PUSH_BUTTON)
+        self.timed_overlay_msg(
+            "Press CRTL + P to open the 'Controls' window\nPRESS ANY KEY TO CLOSE", 10)
+        cv.imshow(self.window, self.contour_img)
+        cv.waitKey(0)
+        cv.destroyAllWindows()
 
-        # Close when ESC is pressed
-        while True:
-            k = cv.waitKey(0) & 0xFF
-            if k == 27:
-                cv.destroyAllWindows()
-                break
+    def calculate_clusters(self) -> np.ndarray:
+        """Calculates the adaptive threshold and clusters for the src image with the selected C and Blocksize values
+
+        Returns:
+            np.ndarray: array of contours
+        """
+        terminal_text.event("Calculating new adaptive threshold")
+        checkbox_values = list(map(lambda x: x.checked, self.clusters))
+        self.clusters = segmentation(self.og_img, self.block_size, self.c_val)
+        for i, val in enumerate(checkbox_values):
+            self.clusters[i].checked = val
+        self.data = self.set_data()
+        return self.clusters
+
+    @debounce(0.025)
+    def refresh_img(self):
+        """Draws contours again on original image, according to the object's parameters
+        """
+        terminal_text.warn("@ Refreshing displayed img")
+        self.contour_img = self.og_img.copy()
+
+        # Drawing contours for clusters
+        if self.preview:
+            for cluster in self.clusters:
+                if not cluster.checked:
+                    continue  # Exits iteration if cluster is not checked
+                cv.drawContours(self.contour_img, cluster.contours, -1,
+                                color=cluster.color, thickness=1, lineType=cv.LINE_4)
+                cv.drawContours(self.contour_img, cluster.disabled_contours, -1,
+                                color=(150, 150, 150), thickness=0, lineType=cv.LINE_4)
+
+        cv.imshow(self.window, self.contour_img)
+
+    def timed_overlay_msg(self, text: str, time: int = 0):
+        """Displays overlay for a defined time or permanently
+
+        Args:
+            text (str): Displayed text on overlay
+            time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
+        """
+        cv.displayOverlay(self.window, f"{text}", time * 1000)
+
+    def timed_statusbar_msg(self, text: str, time: int = 0):
+        """Displays overlay for a defined time or permanently
+
+        Args:
+            text (str): Displayed text on overlay
+            time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
+        """
+        cv.displayStatusBar(self.window, f"{text}", time * 1000)
+
+    def get_claster_by_name(self, cluster_name: str) -> Cluster:
+        index = list(map(lambda x: x.name, self.clusters)).index(cluster_name)
+        return self.clusters[index]
 
     def disable_all(self, *args):
+        """Dis-/enables all clusters' visibility
+        """
         next = not self.preview
         self.preview = next
         self.timed_overlay_msg(
@@ -159,39 +193,6 @@ class ImageWindow():
         self.c_val = val
         self.on_trackbar_sliders_changed()
 
-    def calculate_clusters(self) -> np.ndarray:
-        """Calculates the adaptive threshold and clusters for the src image with the selected C and Blocksize values
-
-        Returns:
-            np.ndarray: array of contours
-        """
-        terminal_text.event("Calculating new adaptive threshold")
-        checkbox_values = list(map(lambda x: x.checked, self.clusters))
-        self.clusters = segmentation(self.og_img, self.block_size, self.c_val)
-        for i, val in enumerate(checkbox_values):
-            self.clusters[i].checked = val
-
-        return self.clusters
-
-    @debounce(0.025)
-    def refresh_img(self):
-        """Draws contours again on original image, according to the object's parameters
-        """
-        terminal_text.warn("@ Refreshing displayed img")
-        self.contour_img = self.og_img.copy()
-
-        # Drawing contours for clusters
-        if self.preview:
-            for cluster in self.clusters:
-                if not cluster.checked:
-                    continue  # Exits iteration if cluster is not checked
-                cv.drawContours(self.contour_img, cluster.contours, -1,
-                                color=cluster.color, thickness=1, lineType=cv.LINE_4)
-                cv.drawContours(self.contour_img, cluster.disabled_contours, -1,
-                                color=(150, 150, 150), thickness=0, lineType=cv.LINE_4)
-
-        cv.imshow(self.window, self.contour_img)
-
     def create_cluster_checkboxes(self):
         """Dynamically create checkbox controls for disabling the visibility of clusters
         """
@@ -200,13 +201,17 @@ class ImageWindow():
                             cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
 
     def save_data(self, *args):
+        terminal_text.succ("@ Saving data")
         self.timed_overlay_msg("Saving results", 3)
-        current_data = self.extract_data()
+
+        og_data = self.data.copy()
         if self.data is None:
-            current_data.to_csv("original_data.csv")
+            terminal_text.err("SELF.DATA IS NONE")
+            og_data.to_csv("original_data.csv")
         else:
+            current_data = self.extract_data()
+            og_data.to_csv("original_data.csv")
             current_data.to_csv("modified_data.csv")
-            self.data.to_csv("original_data.csv")
         stats = self.extract_stats()
         stats.to_csv("stats.csv")
 
@@ -221,15 +226,21 @@ class ImageWindow():
             if not cluster.checked:
                 continue
             for j, contour in enumerate(self.clusters[i].contours):
-                # Enchance peformance wise
+                # TODO: Enhance peformance-wise
                 df.loc[len(df.index)] = [
                     cluster.name, j, cv.contourArea(contour)]
             if disableds:
                 for j, contour in enumerate(self.clusters[i].disabled_contours):
-                    # Enchance peformance wise
+                    # TODO: Enhance peformance-wise
                     df.loc[len(df.index)] = [
                         cluster.name, j, cv.contourArea(contour)]
         return df
+
+    @debounce(1)
+    def set_data(self):
+        """Sets class property 'data' to current state of clusters
+        """
+        self.data = self.extract_data()
 
     def extract_stats(self, *args) -> pd.DataFrame:
         """Extracts the summary of the clusters' distributions
@@ -258,9 +269,26 @@ class ImageWindow():
 
         for index, row in stats.iterrows():
             lines.append(
-                f"{index}: {row['Count']} ({round(row['Percentage'], 2)}%)")
+                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2)}%)")
         image = put_textbox_on_img(image, lines, (25, 25))
         cv.imshow(self.window, image)
+
+    def on_trackbar_sliders_changed(self):
+        """Dispatches stored functions stored in 'on_trackbar_changed' class property
+        """
+        terminal_text.event(f"@ Trackbar sliders changed")
+        for function in self.on_trackbar_changed:
+            function()
+
+    def on_toggle_cluster(self, payload: int, cluster_name: str, *args):
+        """Toggles cluster's checked property
+
+        Args:
+            payload (int): value to be set
+            cluster_name (str): name of the cluster
+        """
+        self.get_claster_by_name(cluster_name).checked = bool(payload)
+        self.refresh_img()
 
     def on_toggle_mode(self, val, mode):
         """Toggles windows info <-> edit mode
@@ -269,25 +297,14 @@ class ImageWindow():
             val (int): payload of the button event
             mode (str): mode flag of the button event
         """
+
         if mode == "EDIT":
-            text = f"{'EDIT' if val else 'INFO' } MODE"
+            text = "EDIT MODE\n'LEFT CLICK' to dis-/enable objects\n'CTRL + LEFT CLICK' to change cluster" if val else "INFO MODE"
             self.timed_overlay_msg(text, 3)
             self.timed_statusbar_msg(text, 1)
             self.edit = bool(val)
-            if val and self.data is None:
-                terminal_text.event("Storing initial cluster data")
-                self.data = self.extract_data()
         else:
             return
-
-    def on_trackbar_sliders_changed(self):
-        terminal_text.event(f"@ Trackbar sliders changed")
-        if self.edit:
-            self.on_toggle_mode(0, "EDIT")
-            self.data = None
-
-        for function in self.on_trackbar_changed:
-            function()
 
     @debounce(0.05)
     def on_mouse_event(self, event, x: int, y: int, *args):
@@ -299,7 +316,6 @@ class ImageWindow():
             y (int): y coord
         """
         point = (x, y)
-
         if not self.edit:
             obj_params = find_object_for_point(point, self.clusters)
             if event == cv.EVENT_LBUTTONDOWN:
@@ -308,7 +324,7 @@ class ImageWindow():
                     img = self.contour_img.copy()
                     img = obj_params.put_params_on_image(img, point)
                     img = cv.drawContours(img, cl.contours[obj_params.indx], -1,
-                                          color=(0, 0, 0), thickness=-2, lineType=cv.LINE_8)
+                                          color=(0, 0, 0), thickness=-1, lineType=cv.LINE_4)
 
                 if obj_params is not None:
                     self.timed_statusbar_msg(f"{obj_params.__str__()}")
@@ -319,35 +335,26 @@ class ImageWindow():
 
         if self.edit:
             # Left btn click disables clicked object
-            if event == cv.EVENT_LBUTTONDOWN and not self.select:
-                result = find_object_for_point(point, self.clusters, True)
-                if result:
-                    self.timed_statusbar_msg(f"{result.__str__()}")
-                    self.refresh_img()
-                return
-
-            # Middle btn clicks moves object to next cluster in list NOTE: Even if the cluster is not displayed (via the checkboxes)
-            elif event == cv.EVENT_MBUTTONDOWN:
-                for i, cluster in enumerate(self.clusters):
-                    if not cluster.checked:  # Skips disabled clusters
-                        continue
-                    for j, contour in enumerate(cluster.contours):
-                        if cv.pointPolygonTest(contour, point, False) >= 0:
-                            mod = len(self.clusters)
-                            next_i = (i + 1) % mod
-
-                            terminal_text.event(
-                                f"@ Middle click at {point} -> Changing cluster of object from {cluster.name} to {self.clusters[next_i].name}")
-                            # Moving object to the next cluster
-                            self.clusters[next_i].contours.append(
-                                cluster.contours.pop(j))
-                            self.refresh_img()
-                            return
-                return
-
-    def on_toggle_cluster(self, payload, cluster_name, *args):
-        self.get_claster_by_name(cluster_name).checked = bool(payload)
-        self.refresh_img()
+            if event == cv.EVENT_LBUTTONDOWN:
+                if args[0] != 9:
+                    result = find_object_for_point(point, self.clusters, True)
+                    if result:
+                        self.timed_statusbar_msg(f"{result.__str__()}")
+                        self.refresh_img()
+                    return
+                else:
+                    result = find_object_for_point(point, self.clusters, False)
+                    cl = self.get_claster_by_name(result.cluster)
+                    if not result.disabled:
+                        mod = len(self.clusters)
+                        next_i = (self.clusters.index(cl) + 1) % mod
+                        terminal_text.event(
+                            f"Changing cluster of object from {result.cluster} to {self.clusters[next_i].name}")
+                        self.clusters[next_i].contours.append(
+                            cl.contours.pop(result.indx))
+                        self.refresh_img()
+                        return
+            return
 
 
 def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", disable=False) -> ObjectParams or None:
@@ -395,9 +402,9 @@ def divide_contours_into_clusters(contours: np.ndarray, ) -> "list[Cluster]":
     Returns:
         list[Cluster]: clusters
     """
+    # NOTE: hardcoded clusters!
     clusters: "list[Cluster]" = [Cluster("c1", (244, 133, 66)), Cluster(
         "c2", (83, 168, 52)), Cluster("c3", (5, 188, 251)), Cluster("c4", (53, 67, 234))]
-    # NOTE: hardcoded clusters!
 
     # List of the areas of countours (matching indices)
     areas = list(map(lambda x: cv.contourArea(x), contours))
@@ -470,10 +477,22 @@ def put_text(img: np.ndarray, text: str, org: "tuple(int, int)", font=cv.FONT_HE
     return im
 
 
-def put_textbox_on_img(img, lines: "list[str]", point):
-    image = img.copy()
-    end_point = (point[0] + 200, point[1] + len(lines) * 30)
+def put_textbox_on_img(img, lines: "list[str]", point, width=200):
+    """Creates a textbox on image
 
+    Args:
+        img (np.ndarray): Input image
+        lines (list[str]): Lines to be displayed on the textbox
+        point (tuple(int,int)): Top left corner of the textbox
+        width (int, optional): width of textbox in pixels. Defaults to 200.
+
+    Returns:
+        np.ndarray: output img
+    """
+    image = img.copy()
+    end_point = (point[0] + width, point[1] + len(lines) * 30)
+
+    # Ensuring that the textbox is visible
     diff = (img.shape[1]-end_point[0], img.shape[0]-end_point[1])
     if diff[0] < 0:
         point = (point[0]+diff[0], point[1])
@@ -482,15 +501,70 @@ def put_textbox_on_img(img, lines: "list[str]", point):
         point = (point[0], point[1]+diff[1])
         end_point = (end_point[0], end_point[1]+diff[1])
 
+    # Creating box
     image = cv.rectangle(
         image, point, end_point, (0, 0, 0), 3)
     image = cv.rectangle(
         image, point, end_point, (225, 225, 225), -1)
+
+    # Inserting lines of text
     point = (point[0] + 10, point[1] + 20)
     for line in lines:
         image = put_text(image, str(line), point)
         point = (point[0], point[1] + 30)
     return image
+
+
+def manual_on_img(img2):
+    shape = (400, 648, 3)
+    img = np.zeros(shape)
+
+    outline_col = (100, 100, 100)
+
+    arrow_len = 70
+    arrow_col = (0, 100, 255)
+    arrow_offset = 25
+
+    tb_h = 30
+    bb_h = shape[0] - 20
+    but_w = 26
+    but_mid = int(10.5 * but_w)
+
+    cv.line(img, (0, tb_h), (shape[1], tb_h), outline_col, 3)
+    for i in range(1, 12):
+        cv.line(img, (i * but_w, 0), (i * but_w, tb_h), outline_col, 3)
+    tb_h += 10
+    cv.arrowedLine(img, (but_mid, tb_h+arrow_len),
+                   (but_mid, tb_h), arrow_col, 3)
+    cv.putText(img, "Open 'controls' window", (but_mid - 50, tb_h + arrow_len + arrow_offset),
+               cv.FONT_HERSHEY_SIMPLEX, 1, arrow_col, 3)
+
+    arrow_col = (0, 255, 0)
+    cv.line(img, (0, bb_h), (shape[1], bb_h), outline_col, 3)
+    bb_h -= 10
+    cv.arrowedLine(img, (50, bb_h - arrow_len), (50, bb_h), arrow_col, 3)
+    cv.putText(img, "Selected object props", (5, bb_h - (arrow_len + (arrow_offset - 10))),
+               cv.FONT_HERSHEY_SIMPLEX, 1, arrow_col, 3)
+
+    pw = 5
+    img[:, 0:pw] = outline_col
+    img[:, -pw:] = outline_col
+    img[0:pw, :] = outline_col
+    img[-pw:, :] = outline_col
+    h, w = img.shape[0], img.shape[1]
+
+    # load background image as grayscale
+    back = img2.copy()
+    hh, ww = back.shape[0], back.shape[1]
+
+    # compute xoff and yoff for placement of upper left corner of resized image
+    yoff = round((hh - h) / 2)
+    xoff = round((ww - w) / 2)
+
+    # use numpy indexing to place the resized image in the center of background image
+    result = back.copy()
+    result[yoff:yoff + h, xoff:xoff + w] = img
+    return result
 
 
 def opencving():

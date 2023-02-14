@@ -11,4 +11,4 @@ def err(txt: str):
 
 
 def event(txt: str):
-    print('\x1b[0;30;47m' + str(txt) + '\x1b[0m')
+    print('\x1b[0;30;47m' + "@ " + str(txt) + '\x1b[0m')
