@@ -41,7 +41,8 @@ class ObjectParams():
     def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs):
         lines = self.__str__().split(sep=", ")
         lines.pop(1)
-        image = put_textbox_on_img(img, lines, (org[0] + 10, org[1]), 120)
+        image, textbox = put_textbox_on_img(
+            img, lines, (org[0] + 10, org[1]), 120)
         return image
 
 
@@ -59,7 +60,7 @@ class ImageWindow():
         self.on_trackbar_changed = []
         self.edit = False
         self.preview = True
-        self.select = False
+        self.stats = False
         if img is not None:
             self.set_base_image(img)
 
@@ -91,7 +92,7 @@ class ImageWindow():
         self.create_cluster_checkboxes()
         cv.createButton("EN/DISABLE ALL", self.disable_all, "ALL",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
-        cv.createButton("DISPLAY STATS", self.display_stats, "DISPLAY",
+        cv.createButton("DISPLAY STATS", self.on_display_stats, "DISPLAY",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
         cv.createButton("SAVE DATA", self.save_data, "print",
                         cv.QT_PUSH_BUTTON)
@@ -131,17 +132,21 @@ class ImageWindow():
                                 color=cluster.color, thickness=1, lineType=cv.LINE_4)
                 cv.drawContours(self.contour_img, cluster.disabled_contours, -1,
                                 color=(150, 150, 150), thickness=0, lineType=cv.LINE_4)
-
         cv.imshow(self.window, self.contour_img)
 
-    def timed_overlay_msg(self, text: str, time: int = 0):
+        if self.stats:
+            self.display_stats()
+
+    def timed_overlay_msg(self, text: str, time: int = 0, window: str = None):
         """Displays overlay for a defined time or permanently
 
         Args:
             text (str): Displayed text on overlay
             time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
         """
-        cv.displayOverlay(self.window, f"{text}", time * 1000)
+        if window is None:
+            window = self.window
+        cv.displayOverlay(window, f"{text}", time * 1000)
 
     def timed_statusbar_msg(self, text: str, time: int = 0):
         """Displays overlay for a defined time or permanently
@@ -269,9 +274,9 @@ class ImageWindow():
 
         for index, row in stats.iterrows():
             lines.append(
-                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2)}%)")
-        image = put_textbox_on_img(image, lines, (25, 25))
-        cv.imshow(self.window, image)
+                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2) if bool(row['Count']) else '0'}%)")
+        image, textbox = put_textbox_on_img(image, lines, (25, 25))
+        cv.imshow("Statistics", textbox)
 
     def on_trackbar_sliders_changed(self):
         """Dispatches stored functions stored in 'on_trackbar_changed' class property
@@ -289,6 +294,15 @@ class ImageWindow():
         """
         self.get_claster_by_name(cluster_name).checked = bool(payload)
         self.refresh_img()
+
+    def on_display_stats(self, *args):
+        """'Display stats' button handler
+        """
+        self.stats = not self.stats
+        if self.stats:
+            self.display_stats()
+        else:
+            cv.destroyWindow("Statistics")
 
     def on_toggle_mode(self, val, mode):
         """Toggles windows info <-> edit mode
@@ -344,16 +358,17 @@ class ImageWindow():
                     return
                 else:
                     result = find_object_for_point(point, self.clusters, False)
-                    cl = self.get_claster_by_name(result.cluster)
-                    if not result.disabled:
-                        mod = len(self.clusters)
-                        next_i = (self.clusters.index(cl) + 1) % mod
-                        terminal_text.event(
-                            f"Changing cluster of object from {result.cluster} to {self.clusters[next_i].name}")
-                        self.clusters[next_i].contours.append(
-                            cl.contours.pop(result.indx))
-                        self.refresh_img()
-                        return
+                    if result:
+                        cl = self.get_claster_by_name(result.cluster)
+                        if not result.disabled:
+                            mod = len(self.clusters)
+                            next_i = (self.clusters.index(cl) + 1) % mod
+                            terminal_text.event(
+                                f"Changing cluster of object from {result.cluster} to {self.clusters[next_i].name}")
+                            self.clusters[next_i].contours.append(
+                                cl.contours.pop(result.indx))
+                            self.refresh_img()
+                            return
             return
 
 
@@ -392,7 +407,7 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
     return None
 
 
-# NOTE: This is function should be replace with a more precise classification
+# NOTE: This is function should be replaced with a more precise classification
 def divide_contours_into_clusters(contours: np.ndarray, ) -> "list[Cluster]":
     """Classifies contours (polygons) into clusters given clusters
         Note: currently based on size
@@ -435,7 +450,7 @@ def divide_contours_into_clusters(contours: np.ndarray, ) -> "list[Cluster]":
 
 
 # NOTE: This is function should be replace with a more precise segmentation
-def segmentation(img: np.ndarray, block_size: int, c_val: int):
+def segmentation(img: np.ndarray, block_size: int, c_val: int) -> "list[Cluster]":
     """Object segmention on image
 
     Args:
@@ -477,7 +492,7 @@ def put_text(img: np.ndarray, text: str, org: "tuple(int, int)", font=cv.FONT_HE
     return im
 
 
-def put_textbox_on_img(img, lines: "list[str]", point, width=200):
+def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)", width=200):
     """Creates a textbox on image
 
     Args:
@@ -490,16 +505,21 @@ def put_textbox_on_img(img, lines: "list[str]", point, width=200):
         np.ndarray: output img
     """
     image = img.copy()
-    end_point = (point[0] + width, point[1] + len(lines) * 30)
+
+    offset_y, offset_x = 20, 10
+    line_h = 30
+
+    point = (start_point[0], start_point[1])
+    end_point = (point[0] + width, point[1] + len(lines) * line_h)
 
     # Ensuring that the textbox is visible
-    diff = (img.shape[1]-end_point[0], img.shape[0]-end_point[1])
+    diff = (img.shape[1] - end_point[0], img.shape[0] - end_point[1])
     if diff[0] < 0:
-        point = (point[0]+diff[0], point[1])
-        end_point = (end_point[0]+diff[0], end_point[1])
+        point = (point[0] + diff[0], point[1])
+        end_point = (end_point[0] + diff[0], end_point[1])
     if diff[1] < 0:
-        point = (point[0], point[1]+diff[1])
-        end_point = (end_point[0], end_point[1]+diff[1])
+        point = (point[0], point[1] + diff[1])
+        end_point = (end_point[0], end_point[1] + diff[1])
 
     # Creating box
     image = cv.rectangle(
@@ -508,11 +528,11 @@ def put_textbox_on_img(img, lines: "list[str]", point, width=200):
         image, point, end_point, (225, 225, 225), -1)
 
     # Inserting lines of text
-    point = (point[0] + 10, point[1] + 20)
+    point = (point[0] + offset_x, point[1] + offset_y)
     for line in lines:
-        image = put_text(image, str(line), point)
-        point = (point[0], point[1] + 30)
-    return image
+        image = put_text(image, str(line), point, font=cv.FONT_HERSHEY_PLAIN)
+        point = (point[0], point[1] + line_h)
+    return image, image[start_point[0]:end_point[0] - offset_y, start_point[1]:end_point[1]]
 
 
 def manual_on_img(img2):
@@ -534,7 +554,7 @@ def manual_on_img(img2):
     for i in range(1, 12):
         cv.line(img, (i * but_w, 0), (i * but_w, tb_h), outline_col, 3)
     tb_h += 10
-    cv.arrowedLine(img, (but_mid, tb_h+arrow_len),
+    cv.arrowedLine(img, (but_mid, tb_h + arrow_len),
                    (but_mid, tb_h), arrow_col, 3)
     cv.putText(img, "Open 'controls' window", (but_mid - 50, tb_h + arrow_len + arrow_offset),
                cv.FONT_HERSHEY_SIMPLEX, 1, arrow_col, 3)
@@ -570,8 +590,10 @@ def manual_on_img(img2):
 def opencving():
     """Test of the code
     """
-    window = ImageWindow(cv.imread("img\\cells8.tif"))
+    # NOTE: relative hardcoded path, might need to change
+    window = ImageWindow(cv.imread("img\cells8.tif"))
     window.open_window()
 
 
-opencving()
+if __name__ == "__main__":
+    opencving()
