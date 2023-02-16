@@ -60,7 +60,7 @@ class ImageWindow():
         self.on_trackbar_changed = []
         self.edit = False
         self.preview = True
-        self.stats = False
+        self.stats = True
         if img is not None:
             self.set_base_image(img)
 
@@ -226,22 +226,26 @@ class ImageWindow():
         Returns:
             pandas.DataFrame: Dataframe with object properties
         """
+        # TODO: SOMETHING'S FUCKY, reproduce: trackbars to max
+
         df = pd.DataFrame({"cluster": [], "index": [], "area": []})
         for i, cluster in enumerate(self.clusters):
             if not cluster.checked:
                 continue
-            for j, contour in enumerate(self.clusters[i].contours):
-                # TODO: Enhance peformance-wise
-                df.loc[len(df.index)] = [
-                    cluster.name, j, cv.contourArea(contour)]
-            if disableds:
-                for j, contour in enumerate(self.clusters[i].disabled_contours):
+            if len(cluster.contours):
+                for j, contour in enumerate(self.clusters[i].contours):
                     # TODO: Enhance peformance-wise
                     df.loc[len(df.index)] = [
                         cluster.name, j, cv.contourArea(contour)]
+
+                if disableds:
+                    for j, contour in enumerate(self.clusters[i].disabled_contours):
+                        # TODO: Enhance peformance-wise
+                        df.loc[len(df.index)] = [
+                            cluster.name, j, cv.contourArea(contour)]
         return df
 
-    @debounce(1)
+    @debounce(0.5)
     def set_data(self):
         """Sets class property 'data' to current state of clusters
         """
@@ -256,9 +260,12 @@ class ImageWindow():
             list(map(lambda x: len(x.disabled_contours), self.clusters))))
         all = np.sum(lengths)
         indexes = list(map(lambda x: x.name, self.clusters))
-
-        frame = {'Count': pd.Series(lengths, index=indexes),
-                 'Percentage': pd.Series((lengths / all) * 100, index=indexes)}
+        if not all:
+            frame = {'Count': np.zeros(
+                len(lengths),), 'Percentage': np.zeros(len(lengths),)}
+        else:
+            frame = {'Count': pd.Series(lengths, index=indexes),
+                     'Percentage': pd.Series((lengths / all) * 100, index=indexes)}
         df1 = pd.DataFrame(frame, index=indexes)
         df2 = pd.DataFrame({'Count': [all, disableds], 'Percentage': [
             100, 0]}, index=['all', 'disabled'])
@@ -276,6 +283,8 @@ class ImageWindow():
             lines.append(
                 f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2) if bool(row['Count']) else '0'}%)")
         image, textbox = put_textbox_on_img(image, lines, (25, 25))
+
+        # if textbox.shape[0] and textbox.shape[1]:
         cv.imshow("Statistics", textbox)
 
     def on_trackbar_sliders_changed(self):
@@ -423,6 +432,9 @@ def divide_contours_into_clusters(contours: np.ndarray, ) -> "list[Cluster]":
 
     # List of the areas of countours (matching indices)
     areas = list(map(lambda x: cv.contourArea(x), contours))
+
+    if not len(areas):
+        return clusters
 
     mn = np.floor(np.min(areas))
     mx = np.ceil(np.max(areas))
