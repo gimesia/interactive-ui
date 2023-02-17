@@ -547,65 +547,14 @@ def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)", 
     return image, image[start_point[0]:end_point[0] - offset_y, start_point[1]:end_point[1]]
 
 
-def manual_on_img(img2):
-    shape = (400, 648, 3)
-    img = np.zeros(shape)
-
-    outline_col = (100, 100, 100)
-
-    arrow_len = 70
-    arrow_col = (0, 100, 255)
-    arrow_offset = 25
-
-    tb_h = 30
-    bb_h = shape[0] - 20
-    but_w = 26
-    but_mid = int(10.5 * but_w)
-
-    cv.line(img, (0, tb_h), (shape[1], tb_h), outline_col, 3)
-    for i in range(1, 12):
-        cv.line(img, (i * but_w, 0), (i * but_w, tb_h), outline_col, 3)
-    tb_h += 10
-    cv.arrowedLine(img, (but_mid, tb_h + arrow_len),
-                   (but_mid, tb_h), arrow_col, 3)
-    cv.putText(img, "Open 'controls' window", (but_mid - 50, tb_h + arrow_len + arrow_offset),
-               cv.FONT_HERSHEY_SIMPLEX, 1, arrow_col, 3)
-
-    arrow_col = (0, 255, 0)
-    cv.line(img, (0, bb_h), (shape[1], bb_h), outline_col, 3)
-    bb_h -= 10
-    cv.arrowedLine(img, (50, bb_h - arrow_len), (50, bb_h), arrow_col, 3)
-    cv.putText(img, "Selected object props", (5, bb_h - (arrow_len + (arrow_offset - 10))),
-               cv.FONT_HERSHEY_SIMPLEX, 1, arrow_col, 3)
-
-    pw = 5
-    img[:, 0:pw] = outline_col
-    img[:, -pw:] = outline_col
-    img[0:pw, :] = outline_col
-    img[-pw:, :] = outline_col
-    h, w = img.shape[0], img.shape[1]
-
-    # load background image as grayscale
-    back = img2.copy()
-    hh, ww = back.shape[0], back.shape[1]
-
-    # compute xoff and yoff for placement of upper left corner of resized image
-    yoff = round((hh - h) / 2)
-    xoff = round((ww - w) / 2)
-
-    # use numpy indexing to place the resized image in the center of background image
-    result = back.copy()
-    result[yoff:yoff + h, xoff:xoff + w] = img
-    return result
-
-
-def opencving():
-    """Test of the code
-    """
-    # NOTE: relative hardcoded path, might need to change
-    window = ImageWindow(cv.imread("img\cells8.tif"))
-    window.open_window()
+def centroid_for_contour(contour):
+    M = cv.moments(contour)
+    cx = int(M['m10'] / M['m00'])
+    cy = int(M['m01'] / M['m00'])
+    return (cx, cy)
 
 
 if __name__ == "__main__":
-    opencving()
+    # NOTE: relative hardcoded path, might need to change
+    window = ImageWindow(cv.imread("img\cells8.tif"))
+    window.open_window()
