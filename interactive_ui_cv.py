@@ -1,7 +1,9 @@
-
+import json
+import sys
 import cv2 as cv
 import numpy as np
 import pandas as pd
+import zmq
 
 from debounce import debounce
 import terminal_text  # only for debugging
@@ -27,22 +29,39 @@ class Cluster():
     def enable_contour(self, index: int):
         self.contours.append(self.disabled_contours.pop(index))
 
+    @property
+    def __geo_interface__(self):
+        features = []
+        for i, contour in enumerate(self.contours):
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": contour[:, 0, :]},
+                "properties": {
+                    "index": i,
+                    "area": cv.contourArea(contour),
+                    "center": centroid_for_contour(contour)
+                }})
+        return {"type": "FeatureCollection", "features": features, "properties": {"cluster": self.name, "index": i}}
+
 
 class ObjectParams():
-    def __init__(self, cluster_name, i, area, disabled):
+    def __init__(self, cluster_name, i, area, center, disabled):
         self.cluster = cluster_name
         self.indx = i
         self.area = area
+        self.center = center
         self.disabled = disabled
 
     def __str__(self) -> str:
-        return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}, index: {self.indx}, area: {self.area}"
+        return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}; index: {self.indx}; area: {self.area}; center: {self.center}"
 
     def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs):
-        lines = self.__str__().split(sep=", ")
+        lines = self.__str__().split(sep="; ")
         lines.pop(1)
         image, textbox = put_textbox_on_img(
-            img, lines, (org[0] + 10, org[1]), 120)
+            img, lines, (org[0] + 10, org[1]), 175)
         return image
 
 
@@ -70,8 +89,8 @@ class ImageWindow():
     def open_window(self):
         """Opens window with segemented image and controls
         """
-        cv.namedWindow(self.window)
-
+        cv.namedWindow(self.window, cv.WINDOW_NORMAL)
+        cv.resizeWindow(self.window, 1500, 800)
         # Sliders
         cv.createTrackbar('Block size:', self.window,
                           self.block_size, 255, self.set_block_size)
@@ -98,7 +117,11 @@ class ImageWindow():
                         cv.QT_PUSH_BUTTON)
         self.timed_overlay_msg(
             "Press CRTL + P to open the 'Controls' window\nPRESS ANY KEY TO CLOSE", 10)
-        cv.imshow(self.window, self.contour_img)
+
+        # Show image if possible
+        if self.contour_img is not None:
+            cv.imshow(self.window, self.contour_img)
+
         cv.waitKey(0)
         cv.destroyAllWindows()
 
@@ -108,6 +131,10 @@ class ImageWindow():
         Returns:
             np.ndarray: array of contours
         """
+        if self.og_img is None:
+            print("No image to be shown!")
+            return []
+
         terminal_text.event("Calculating new adaptive threshold")
         checkbox_values = list(map(lambda x: x.checked, self.clusters))
         self.clusters = segmentation(self.og_img, self.block_size, self.c_val)
@@ -120,6 +147,10 @@ class ImageWindow():
     def refresh_img(self):
         """Draws contours again on original image, according to the object's parameters
         """
+        if self.og_img is None:
+            print("No image to be shown!")
+            return []
+
         terminal_text.warn("@ Refreshing displayed img")
         self.contour_img = self.og_img.copy()
 
@@ -130,6 +161,7 @@ class ImageWindow():
                     continue  # Exits iteration if cluster is not checked
                 cv.drawContours(self.contour_img, cluster.contours, -1,
                                 color=cluster.color, thickness=1, lineType=cv.LINE_4)
+
                 cv.drawContours(self.contour_img, cluster.disabled_contours, -1,
                                 color=(150, 150, 150), thickness=0, lineType=cv.LINE_4)
         cv.imshow(self.window, self.contour_img)
@@ -208,7 +240,8 @@ class ImageWindow():
     def save_data(self, *args):
         terminal_text.succ("@ Saving data")
         self.timed_overlay_msg("Saving results", 3)
-
+        if self.data is None:
+            terminal_text.err("No data to be saved!")
         og_data = self.data.copy()
         if self.data is None:
             terminal_text.err("SELF.DATA IS NONE")
@@ -220,6 +253,9 @@ class ImageWindow():
         stats = self.extract_stats()
         stats.to_csv("stats.csv")
 
+        for i in self.clusters:
+            print(i.__geo_interface__)
+
     def extract_data(self, disableds=False):
         """Creates dataframe from active contours of the clusters
 
@@ -227,8 +263,8 @@ class ImageWindow():
             pandas.DataFrame: Dataframe with object properties
         """
         # TODO: SOMETHING'S FUCKY, reproduce: trackbars to max
-
         df = pd.DataFrame({"cluster": [], "index": [], "area": []})
+
         for i, cluster in enumerate(self.clusters):
             if not cluster.checked:
                 continue
@@ -338,6 +374,9 @@ class ImageWindow():
             x (int): x coord
             y (int): y coord
         """
+        if self.og_img is None or self.contour_img is None:
+            return
+
         point = (x, y)
         if not self.edit:
             obj_params = find_object_for_point(point, self.clusters)
@@ -362,7 +401,7 @@ class ImageWindow():
                 if args[0] != 9:
                     result = find_object_for_point(point, self.clusters, True)
                     if result:
-                        self.timed_statusbar_msg(f"{result.__str__()}")
+                        self.timed_statusbar_msg(f"{result.__str__()}", 5)
                         self.refresh_img()
                     return
                 else:
@@ -400,8 +439,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
                     terminal_text.event(
                         f"Disabling {cluster.name} cluster's #{j} object")
                     cluster.disable_contour(j)
-                    return ObjectParams(cluster.name, j, cv.contourArea(contour), True)
-                return ObjectParams(cluster.name, j, cv.contourArea(contour), False)
+                    return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), True)
+                return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
 
         for j, contour in enumerate(cluster.disabled_contours):
             # If point is on or inside the contour
@@ -411,8 +450,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
                     terminal_text.event(
                         f"Enabling {cluster.name} cluster's #{j} object")
                     cluster.enable_contour(j)
-                    return ObjectParams(cluster.name, j, cv.contourArea(contour), False)
-                return ObjectParams(cluster.name, j, cv.contourArea(contour), True)
+                    return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
+                return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), True)
     return None
 
 
@@ -554,7 +593,114 @@ def centroid_for_contour(contour):
     return (cx, cy)
 
 
+# ATTILA'S class with minor changes
+class App():
+    PING = 'PING'
+    THRESHOLD_INFO = 'THRESHOLD_INFO'
+    INP_IMAGE = 'INP_IMAGE'
+    QUERY_CONTOUR = 'QUERY_CONTOUR'
+    DONE = 'DONE'
+    ALIVE = 'ALIVE'
+    EXIT = 'EXIT'
+    UNKNOWN = 'UNKNOWN'
+
+    def __init__(self):
+        print(f"sys argv: {sys.argv}")
+        if len(sys.argv) > 1:
+            self.is_preview = True if sys.argv[1] == 'True' else False
+        else:
+            self.is_preview = True
+
+        if self.is_preview:
+            super().__init__()
+
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.REP)
+        self.socket.bind('tcp://*:5555')
+
+        self.window: ImageWindow = ImageWindow(cv.imread("img\cells8.tif"))
+
+        if len(sys.argv) > 2:
+            data = sys.argv[2]
+            if data != '':
+                info = json.loads(data)
+                self.window.set_values(info['block_size'], info['c_value'])
+
+        if self.is_preview:
+            self.window.open_window()
+            """            self.attributes('-topmost', True)
+            self.geometry("1920x1017")
+            self.title("Interactive ui")
+            # self.view = View(self, self.model)"""
+        else:
+            self.view = None
+
+        # self.controller = Controller(self.model, self.view, self.socket, self.is_preview)
+
+    def listen(self):
+        if self.socket.poll(100, zmq.POLLIN):
+            message = self.socket.recv_string()
+            if message == self.PING:
+                self.pong()
+            elif message == self.THRESHOLD_INFO:
+                self.receive_threshold_info()
+            elif message == self.INP_IMAGE:
+                self.receive_image()
+            elif message == self.QUERY_CONTOUR:
+                if not self.is_preview:
+                    self.controller.send_info()
+            else:
+                self.unknown_message()
+
+    def receive_image(self):
+        self.socket.send_string(self.DONE)
+        message = self.socket.recv_pyobj()
+        self.window.set_base_image(message)
+        self.controller.apply_adaptive_threshold()
+
+        if self.window is not None:
+            self.window.refresh_img()
+
+        self.socket.send_string(self.DONE)
+
+    def receive_threshold_info(self):
+        self.socket.send_string(self.DONE)
+        message = self.socket.recv_string()
+        data = json.loads(message)
+
+        self.window.set_block_size(data['block_size'])
+        self.window.set_c_value(data['c_value'])
+
+        self.socket.send_string(self.DONE)
+
+    def pong(self):
+        self.socket.send_string(self.ALIVE)
+
+    def unknown_message(self):
+        self.socket.send_string(self.UNKNOWN)
+
+    def dispose(self):
+        if self.socket.poll(100):
+            self.socket.recv_string()
+        self.socket.send_string(self.EXIT)
+        self.destroy()
+
+
+is_open = True
+
+
+def close_window():
+    global is_open
+    is_open = False
+
+
 if __name__ == "__main__":
     # NOTE: relative hardcoded path, might need to change
-    window = ImageWindow(cv.imread("img\cells8.tif"))
-    window.open_window()
+    """    window = ImageWindow(cv.imread("img\cells8.tif"))
+    window.open_window()"""
+    app = App()
+    if app.is_preview:
+        app.protocol("WM_DELETE_WINDOW", close_window)
+    while is_open:
+        app.listen()
+    app.dispose()
