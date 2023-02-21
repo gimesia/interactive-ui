@@ -1,12 +1,34 @@
 import json
-import sys
-import cv2 as cv
-import numpy as np
-import pandas as pd
+from threading import Timer
 import zmq
+import numpy as np
+import cv2 as cv
+import subprocess
+import sys
 
-from debounce import debounce
-import terminal_text  # only for debugging
+
+# import pandas as pd
+
+# from debounce import debounce
+# import terminal_text  # only for debugging
+
+
+def debounce(wait):
+    """ Decorator that will postpone a functions
+        execution until after wait seconds
+        have elapsed since the last time it was invoked. """
+    def decorator(fn):
+        def debounced(*args, **kwargs):
+            def call_it():
+                fn(*args, **kwargs)
+            try:
+                debounced.t.cancel()
+            except (AttributeError):
+                pass
+            debounced.t = Timer(wait, call_it)
+            debounced.t.start()
+        return debounced
+    return decorator
 
 
 class Cluster():
@@ -71,11 +93,9 @@ class ImageWindow():
         self.clusters: list[Cluster] = []
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
-        self.data: pd.DataFrame = None
+        # self.data: pd.DataFrame = None
         self.block_size = 101
         self.c_val = 21
-        self.block_size_on_changed = []
-        self.c_value_on_changed = []
         self.on_trackbar_changed = []
         self.edit = False
         self.preview = True
@@ -103,6 +123,7 @@ class ImageWindow():
         # Finding clusters
         self.calculate_clusters()
 
+        """
         # Creating control buttons
         cv.createButton("INFO MODE", self.on_toggle_mode,
                         "INFO", cv.QT_RADIOBOX, not self.edit)
@@ -115,6 +136,7 @@ class ImageWindow():
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
         cv.createButton("SAVE DATA", self.save_data, "print",
                         cv.QT_PUSH_BUTTON)
+        """
         self.timed_overlay_msg(
             "Press CRTL + P to open the 'Controls' window\nPRESS ANY KEY TO CLOSE", 10)
 
@@ -135,7 +157,7 @@ class ImageWindow():
             print("No image to be shown!")
             return []
 
-        terminal_text.event("Calculating new adaptive threshold")
+        # terminal_text.event("Calculating new adaptive threshold")
         checkbox_values = list(map(lambda x: x.checked, self.clusters))
         self.clusters = segmentation(self.og_img, self.block_size, self.c_val)
         for i, val in enumerate(checkbox_values):
@@ -151,7 +173,7 @@ class ImageWindow():
             print("No image to be shown!")
             return []
 
-        terminal_text.warn("@ Refreshing displayed img")
+        # terminal_text.warn("@ Refreshing displayed img")
         self.contour_img = self.og_img.copy()
 
         # Drawing contours for clusters
@@ -178,7 +200,8 @@ class ImageWindow():
         """
         if window is None:
             window = self.window
-        cv.displayOverlay(window, f"{text}", time * 1000)
+        # cv.displayOverlay(window, f"{text}", time * 1000)
+        pass
 
     def timed_statusbar_msg(self, text: str, time: int = 0):
         """Displays overlay for a defined time or permanently
@@ -187,7 +210,8 @@ class ImageWindow():
             text (str): Displayed text on overlay
             time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
         """
-        cv.displayStatusBar(self.window, f"{text}", time * 1000)
+        # cv.displayStatusBar(self.window, f"{text}", time * 1000)
+        pass
 
     def get_claster_by_name(self, cluster_name: str) -> Cluster:
         index = list(map(lambda x: x.name, self.clusters)).index(cluster_name)
@@ -218,7 +242,7 @@ class ImageWindow():
         if val % 2 != 1:
             val += 1
 
-        terminal_text.event(f"@ Block size set to: {val}")
+        # terminal_text.event(f"@ Block size set to: {val}")
         self.block_size = val
         self.on_trackbar_sliders_changed()
 
@@ -226,25 +250,28 @@ class ImageWindow():
         if val < 1:
             val = 3
 
-        terminal_text.event(f"@ C value set to: {val}")
+        # terminal_text.event(f"@ C value set to: {val}")
         self.c_val = val
         self.on_trackbar_sliders_changed()
 
     def create_cluster_checkboxes(self):
         """Dynamically create checkbox controls for disabling the visibility of clusters
         """
+        """
         for cl in self.clusters:
             cv.createButton(cl.name, self.on_toggle_cluster, cl.name,
                             cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
+        """
+        pass
 
     def save_data(self, *args):
-        terminal_text.succ("@ Saving data")
+        # terminal_text.succ("@ Saving data")
         self.timed_overlay_msg("Saving results", 3)
-        if self.data is None:
-            terminal_text.err("No data to be saved!")
+        # if self.data is None:
+        # terminal_text.err("No data to be saved!")
         og_data = self.data.copy()
         if self.data is None:
-            terminal_text.err("SELF.DATA IS NONE")
+            # terminal_text.err("SELF.DATA IS NONE")
             og_data.to_csv("original_data.csv")
         else:
             current_data = self.extract_data()
@@ -262,8 +289,10 @@ class ImageWindow():
         Returns:
             pandas.DataFrame: Dataframe with object properties
         """
+        print("EXTRACT DATA SKIP")
+        return
         # TODO: SOMETHING'S FUCKY, reproduce: trackbars to max
-        df = pd.DataFrame({"cluster": [], "index": [], "area": []})
+        # df = pd.DataFrame({"cluster": [], "index": [], "area": []})
 
         for i, cluster in enumerate(self.clusters):
             if not cluster.checked:
@@ -287,10 +316,12 @@ class ImageWindow():
         """
         self.data = self.extract_data()
 
-    def extract_stats(self, *args) -> pd.DataFrame:
+    def extract_stats(self, *args):  # -> pd.DataFrame:
         """Extracts the summary of the clusters' distributions
         """
-        lengths = np.asarray(
+        print("EXTRACT STATS SKIP")
+        return
+        """        lengths = np.asarray(
             list(map(lambda x: len(x.contours), self.clusters)))
         disableds = np.sum(np.asarray(
             list(map(lambda x: len(x.disabled_contours), self.clusters))))
@@ -305,7 +336,7 @@ class ImageWindow():
         df1 = pd.DataFrame(frame, index=indexes)
         df2 = pd.DataFrame({'Count': [all, disableds], 'Percentage': [
             100, 0]}, index=['all', 'disabled'])
-        return pd.concat(objs=[df1, df2])
+        return pd.concat(objs=[df1, df2])"""
 
     def display_stats(self, *args):
         """Displays cluster statistics on window
@@ -326,7 +357,7 @@ class ImageWindow():
     def on_trackbar_sliders_changed(self):
         """Dispatches stored functions stored in 'on_trackbar_changed' class property
         """
-        terminal_text.event(f"@ Trackbar sliders changed")
+        # terminal_text.event(f"@ Trackbar sliders changed")
         for function in self.on_trackbar_changed:
             function()
 
@@ -411,8 +442,8 @@ class ImageWindow():
                         if not result.disabled:
                             mod = len(self.clusters)
                             next_i = (self.clusters.index(cl) + 1) % mod
-                            terminal_text.event(
-                                f"Changing cluster of object from {result.cluster} to {self.clusters[next_i].name}")
+                            # terminal_text.event(
+                            # f"Changing cluster of object from {result.cluster} to {self.clusters[next_i].name}")
                             self.clusters[next_i].contours.append(
                                 cl.contours.pop(result.indx))
                             self.refresh_img()
@@ -436,8 +467,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
                 # Move to disabled list if disabling is turned on
                 if disable:
-                    terminal_text.event(
-                        f"Disabling {cluster.name} cluster's #{j} object")
+                    # terminal_text.event(
+                    # f"Disabling {cluster.name} cluster's #{j} object")
                     cluster.disable_contour(j)
                     return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), True)
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
@@ -447,8 +478,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
                 # Move to enabled list if disabling is turned on
                 if disable:
-                    terminal_text.event(
-                        f"Enabling {cluster.name} cluster's #{j} object")
+                    # terminal_text.event(
+                    # f"Enabling {cluster.name} cluster's #{j} object")
                     cluster.enable_contour(j)
                     return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), True)
