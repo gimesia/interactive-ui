@@ -5,6 +5,7 @@ import numpy as np
 import cv2 as cv
 import subprocess
 import sys
+import pandas as pd
 
 
 # import pandas as pd
@@ -123,13 +124,12 @@ class ImageWindow():
         # Finding clusters
         self.calculate_clusters()
 
-        """
         # Creating control buttons
-        cv.createButton("INFO MODE", self.on_toggle_mode,
+        """cv.createButton("INFO MODE", self.on_toggle_mode,
                         "INFO", cv.QT_RADIOBOX, not self.edit)
         cv.createButton("EDIT MODE", self.on_toggle_mode, "EDIT",
                         cv.QT_RADIOBOX, self.edit)
-        self.create_cluster_checkboxes()
+              self.create_cluster_checkboxes()
         cv.createButton("EN/DISABLE ALL", self.disable_all, "ALL",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
         cv.createButton("DISPLAY STATS", self.on_display_stats, "DISPLAY",
@@ -141,11 +141,15 @@ class ImageWindow():
             "Press CRTL + P to open the 'Controls' window\nPRESS ANY KEY TO CLOSE", 10)
 
         # Show image if possible
-        if self.contour_img is not None:
-            cv.imshow(self.window, self.contour_img)
+        i = 0
+        self.show_img(0)
 
-        cv.waitKey(0)
         cv.destroyAllWindows()
+
+    def show_img(self, wait: int = 0):
+        cv.imshow(self.window, self.contour_img)
+        cv.imshow(self.window, self.og_img)
+        cv.waitKey(wait)
 
     def calculate_clusters(self) -> np.ndarray:
         """Calculates the adaptive threshold and clusters for the src image with the selected C and Blocksize values
@@ -193,6 +197,7 @@ class ImageWindow():
 
     def timed_overlay_msg(self, text: str, time: int = 0, window: str = None):
         """Displays overlay for a defined time or permanently
+        NOTE: only works with QT!
 
         Args:
             text (str): Displayed text on overlay
@@ -205,6 +210,7 @@ class ImageWindow():
 
     def timed_statusbar_msg(self, text: str, time: int = 0):
         """Displays overlay for a defined time or permanently
+        NOTE: only works with QT!
 
         Args:
             text (str): Displayed text on overlay
@@ -290,9 +296,8 @@ class ImageWindow():
             pandas.DataFrame: Dataframe with object properties
         """
         print("EXTRACT DATA SKIP")
-        return
         # TODO: SOMETHING'S FUCKY, reproduce: trackbars to max
-        # df = pd.DataFrame({"cluster": [], "index": [], "area": []})
+        df = pd.DataFrame({"cluster": [], "index": [], "area": []})
 
         for i, cluster in enumerate(self.clusters):
             if not cluster.checked:
@@ -320,8 +325,7 @@ class ImageWindow():
         """Extracts the summary of the clusters' distributions
         """
         print("EXTRACT STATS SKIP")
-        return
-        """        lengths = np.asarray(
+        lengths = np.asarray(
             list(map(lambda x: len(x.contours), self.clusters)))
         disableds = np.sum(np.asarray(
             list(map(lambda x: len(x.disabled_contours), self.clusters))))
@@ -336,7 +340,7 @@ class ImageWindow():
         df1 = pd.DataFrame(frame, index=indexes)
         df2 = pd.DataFrame({'Count': [all, disableds], 'Percentage': [
             100, 0]}, index=['all', 'disabled'])
-        return pd.concat(objs=[df1, df2])"""
+        return pd.concat(objs=[df1, df2])
 
     def display_stats(self, *args):
         """Displays cluster statistics on window
@@ -624,114 +628,7 @@ def centroid_for_contour(contour):
     return (cx, cy)
 
 
-# ATTILA'S class with minor changes
-class App():
-    PING = 'PING'
-    THRESHOLD_INFO = 'THRESHOLD_INFO'
-    INP_IMAGE = 'INP_IMAGE'
-    QUERY_CONTOUR = 'QUERY_CONTOUR'
-    DONE = 'DONE'
-    ALIVE = 'ALIVE'
-    EXIT = 'EXIT'
-    UNKNOWN = 'UNKNOWN'
-
-    def __init__(self):
-        print(f"sys argv: {sys.argv}")
-        if len(sys.argv) > 1:
-            self.is_preview = True if sys.argv[1] == 'True' else False
-        else:
-            self.is_preview = True
-
-        if self.is_preview:
-            super().__init__()
-
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
-        self.socket.bind('tcp://*:5555')
-
-        self.window: ImageWindow = ImageWindow(cv.imread("img\cells8.tif"))
-
-        if len(sys.argv) > 2:
-            data = sys.argv[2]
-            if data != '':
-                info = json.loads(data)
-                self.window.set_values(info['block_size'], info['c_value'])
-
-        if self.is_preview:
-            self.window.open_window()
-            """            self.attributes('-topmost', True)
-            self.geometry("1920x1017")
-            self.title("Interactive ui")
-            # self.view = View(self, self.model)"""
-        else:
-            self.view = None
-
-        # self.controller = Controller(self.model, self.view, self.socket, self.is_preview)
-
-    def listen(self):
-        if self.socket.poll(100, zmq.POLLIN):
-            message = self.socket.recv_string()
-            if message == self.PING:
-                self.pong()
-            elif message == self.THRESHOLD_INFO:
-                self.receive_threshold_info()
-            elif message == self.INP_IMAGE:
-                self.receive_image()
-            elif message == self.QUERY_CONTOUR:
-                if not self.is_preview:
-                    self.controller.send_info()
-            else:
-                self.unknown_message()
-
-    def receive_image(self):
-        self.socket.send_string(self.DONE)
-        message = self.socket.recv_pyobj()
-        self.window.set_base_image(message)
-        self.controller.apply_adaptive_threshold()
-
-        if self.window is not None:
-            self.window.refresh_img()
-
-        self.socket.send_string(self.DONE)
-
-    def receive_threshold_info(self):
-        self.socket.send_string(self.DONE)
-        message = self.socket.recv_string()
-        data = json.loads(message)
-
-        self.window.set_block_size(data['block_size'])
-        self.window.set_c_value(data['c_value'])
-
-        self.socket.send_string(self.DONE)
-
-    def pong(self):
-        self.socket.send_string(self.ALIVE)
-
-    def unknown_message(self):
-        self.socket.send_string(self.UNKNOWN)
-
-    def dispose(self):
-        if self.socket.poll(100):
-            self.socket.recv_string()
-        self.socket.send_string(self.EXIT)
-        self.destroy()
-
-
-is_open = True
-
-
-def close_window():
-    global is_open
-    is_open = False
-
-
 if __name__ == "__main__":
     # NOTE: relative hardcoded path, might need to change
-    """    window = ImageWindow(cv.imread("img\cells8.tif"))
-    window.open_window()"""
-    app = App()
-    if app.is_preview:
-        app.protocol("WM_DELETE_WINDOW", close_window)
-    while is_open:
-        app.listen()
-    app.dispose()
+    window = ImageWindow(cv.imread("img\cells8.tif"))
+    window.open_window()
