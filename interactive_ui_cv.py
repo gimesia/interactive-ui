@@ -125,18 +125,17 @@ class ImageWindow():
         self.calculate_clusters()
 
         # Creating control buttons
-        """cv.createButton("INFO MODE", self.on_toggle_mode,
+        cv.createButton("INFO MODE", self.on_toggle_mode,
                         "INFO", cv.QT_RADIOBOX, not self.edit)
         cv.createButton("EDIT MODE", self.on_toggle_mode, "EDIT",
                         cv.QT_RADIOBOX, self.edit)
-              self.create_cluster_checkboxes()
+        self.create_cluster_checkboxes()
         cv.createButton("EN/DISABLE ALL", self.disable_all, "ALL",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
         cv.createButton("DISPLAY STATS", self.on_display_stats, "DISPLAY",
                         cv.QT_PUSH_BUTTON | cv.QT_NEW_BUTTONBAR, 0)
         cv.createButton("SAVE DATA", self.save_data, "print",
                         cv.QT_PUSH_BUTTON)
-        """
         self.timed_overlay_msg(
             "Press CRTL + P to open the 'Controls' window\nPRESS ANY KEY TO CLOSE", 10)
 
@@ -205,7 +204,7 @@ class ImageWindow():
         """
         if window is None:
             window = self.window
-        # cv.displayOverlay(window, f"{text}", time * 1000)
+        cv.displayOverlay(window, f"{text}", time * 1000)
         pass
 
     def timed_statusbar_msg(self, text: str, time: int = 0):
@@ -216,7 +215,7 @@ class ImageWindow():
             text (str): Displayed text on overlay
             time (int, optional): Visibility time in seconds. Defaults to 0, meaning its permament.
         """
-        # cv.displayStatusBar(self.window, f"{text}", time * 1000)
+        cv.displayStatusBar(self.window, f"{text}", time * 1000)
         pass
 
     def get_claster_by_name(self, cluster_name: str) -> Cluster:
@@ -263,12 +262,9 @@ class ImageWindow():
     def create_cluster_checkboxes(self):
         """Dynamically create checkbox controls for disabling the visibility of clusters
         """
-        """
         for cl in self.clusters:
             cv.createButton(cl.name, self.on_toggle_cluster, cl.name,
                             cv.QT_CHECKBOX | cv.QT_NEW_BUTTONBAR, cl.checked)
-        """
-        pass
 
     def save_data(self, *args):
         # terminal_text.succ("@ Saving data")

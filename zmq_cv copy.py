@@ -1,6 +1,7 @@
-import random
-import time
 import asyncio
+import random
+import threading
+import time
 import tkinter
 import cv2 as cv
 import numpy as np
@@ -17,6 +18,11 @@ FAILED = 'FAILED'
 ALIVE = 'ALIVE'
 EXIT = 'EXIT'
 UNKNOWN = 'UNKNOWN'
+
+
+def start_new_thread(fc):
+    thread = threading.Thread(target=fc)
+    thread.start()
 
 
 class Cluster():
@@ -297,7 +303,7 @@ class BigTing():
     """OpenCV image display coroutine"""
     async def coroutine_image(self):
         print('Image Coroutine')
-
+        start_new_thread(self.coroutine_controls)
         j = 0
         while self.op:
             j += 1
@@ -326,29 +332,46 @@ class BigTing():
         print('Image Coroutine is done')
 
     """Tkinter controls & stats window coroutine"""
-    async def coroutine_controls(self):
-        window = tkinter.Tk()
-        greeting = tkinter.Label(text="Hello, Tkinter")
-        greeting.pack()
-        window.after(0, lambda: print("hi"))
-        window.mainloop()
-        await asyncio.wait(0)
+
+    def coroutine_controls(self):
+        # Tkinter window
+        controls_win = tkinter.Tk()
+
+        # Frame for checkboxes
+        checkButtonFrame = tkinter.Frame(controls_win)
+        checkButtonFrame.pack(side='top', fill='y')
+        tkinter.Label(checkButtonFrame, text='Clusters').pack()
+
+        # Checkboxes
+        checkButtons = {}
+        checkButtonVals = {}
+        for i, cluster in enumerate(self.window.clusters):
+            checkButtonVals.update({cluster.name: 0})
+            checkButtons.update({cluster.name: tkinter.Checkbutton(
+                checkButtonFrame, text=cluster.name, variable=checkButtonVals[cluster.name], onvalue=1, offvalue=0, height=1, width=1)})
+            print(checkButtons[cluster.name])
+        for io in checkButtons.values():
+            io.pack()
+
+        controls_win.after(0, lambda: print("hi"))
+        controls_win.mainloop()
+        # await asyncio.wait(0)
 
     async def main(self):
         # create the coroutines
         coroutine1 = self.coroutine_zmq()
         coroutine2 = self.coroutine_image()
-        coroutine3 = self.coroutine_controls()
+        #coroutine3 = self.coroutine_controls()
 
         # schedule the coroutine to run in the background
         task1 = asyncio.create_task(coroutine1)
         task2 = asyncio.create_task(coroutine2)
-        task3 = asyncio.create_task(coroutine3)
+        #task3 = asyncio.create_task(coroutine3)
 
         # simulate continue on with other things
         await task1
         await task2
-        await task3
+        # await task3
 
 
 if __name__ == "__main__":
