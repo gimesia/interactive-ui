@@ -575,17 +575,6 @@ def put_text(img: np.ndarray, text: str, org: "tuple(int, int)", font=cv.FONT_HE
 
 
 def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)", width=200):
-    """Creates a textbox on image
-
-    Args:
-        img (np.ndarray): Input image
-        lines (list[str]): Lines to be displayed on the textbox
-        point (tuple(int,int)): Top left corner of the textbox
-        width (int, optional): width of textbox in pixels. Defaults to 200.
-
-    Returns:
-        np.ndarray: output img
-    """
     image = img.copy()
 
     offset_y, offset_x = 20, 10
