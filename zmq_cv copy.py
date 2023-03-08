@@ -21,6 +21,8 @@ ALIVE = 'ALIVE'
 EXIT = 'EXIT'
 UNKNOWN = 'UNKNOWN'
 
+ZMQ_SERVERNAME = "tcp://*:5557"
+
 
 def start_new_thread(fc):
     thread = threading.Thread(target=fc)
@@ -38,7 +40,7 @@ class ObjectParams():
     def __str__(self) -> str:
         return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}; index: {self.indx}; area: {self.area}; center: {self.center}"
 
-    def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs):
+    def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs) -> np.ndarray:
         lines = self.__str__().split(sep="; ")
         lines.pop(1)
         image, textbox = put_textbox_on_img(
@@ -57,14 +59,13 @@ class Cluster():
         self.contours = []
         self.disabled_contours = []
 
-    def get_all_contours(self):
-        return np.concat(self.contours, self.disabled_contours)
+    def contour_count(self) -> int:
+        return len(self.contours) + len(self.disabled_contours)
 
-    def disable_contour(self, index: int):
-        print("disable contour")
+    def disable_contour(self, index: int) -> None:
         self.disabled_contours.append(self.contours.pop(index))
 
-    def enable_contour(self, index: int):
+    def enable_contour(self, index: int) -> None:
         print("enable contour")
         self.contours.append(self.disabled_contours.pop(index))
 
@@ -169,16 +170,13 @@ class ImageWindow():
         self.edit = not self.edit
         self.refresh_on_next = True
 
-    def on_disable_all(self, *args):
-        print("on_disable_all:")
-        print(args)
-        self.refresh_on_next = True
-
     def on_display_stats(self, *args):
+        # TODO!
         print("on_display_stats:")
         print(args)
 
     def save_data(self, *args):
+        # TODO!
         print("save_data:")
         print(args)
         pass
@@ -224,25 +222,31 @@ class ImageWindow():
         """Extracts the summary of the clusters' distributions
         """
         lengths = np.asarray(
-            list(map(lambda x: len(x.contours), self.clusters)))
+            list(map(lambda cl: len(cl.contours), self.clusters))
+        )
 
-        disableds = np.sum(np.asarray(
-            list(map(lambda x: len(x.disabled_contours), self.clusters))))
+        enabled = np.sum(lengths)
 
-        all = np.sum(lengths)
+        disabled = np.sum(
+            list(map(lambda cl: len(cl.disabled_contours), self.clusters))
+        )
 
-        indexes = list(map(lambda x: x.name, self.clusters))
+        all = np.sum(
+            list(map(lambda cl: cl.contour_count(), self.clusters))
+        )
+
+        indexes = list(map(lambda cl: cl.name, self.clusters))
 
         if not all:
             frame = {'Count': np.zeros(
                 len(lengths),), 'Percentage': np.zeros(len(lengths),)}
         else:
             frame = {'Count': pd.Series(lengths, index=indexes),
-                     'Percentage': pd.Series((lengths / all) * 100, index=indexes)}
+                     'Percentage': pd.Series((lengths / enabled) * 100, index=indexes)}
 
         df1 = pd.DataFrame(frame, index=indexes)
-        df2 = pd.DataFrame({'Count': [all, disableds],
-                            'Percentage': [100, 0]}, index=['all', 'disabled'])
+        df2 = pd.DataFrame({'Count': [enabled, disabled, all],
+                            'Percentage': [100*enabled/all, 100*disabled/all, int(100), ]}, index=['enabled', 'disabled', 'all', ])
         res = pd.concat(objs=[df1, df2])
 
         self.stats = res
@@ -254,9 +258,25 @@ class ImageWindow():
 
         return res, lines
 
-    def disable_contours(self):
-        self.show_contours = not self.show_contours
-        self.refresh_on_next = True
+    def claster_by_name(self, cluster_name: str) -> Cluster:
+        index = list(map(lambda x: x.name, self.clusters)).index(cluster_name)
+        print(self.clusters[index])
+        return self.clusters[index]
+
+    def change_cluster(self, params: ObjectParams, backwards=False):
+        if params.disabled:
+            return
+        cl = self.claster_by_name(params.cluster)
+        next = self.clusters.index(cl)
+        if backwards:
+            next -= 1
+        else:
+            next += 1
+        next %= len(self.clusters)
+
+        self.clusters[next].contours.append(
+            cl.contours.pop(params.indx)
+        )
 
     def on_mouse_event(self, event, x: int, y: int, flags, *args) -> None:
         """Mouse event listener with all the respective actions to be listened to (click, dblclick, hover, etc.)
@@ -275,14 +295,16 @@ class ImageWindow():
         print(f"flags: {flags}")
 
         if event == 4:
-            a = find_object_for_point(point, self.clusters, True)
-            print(a)
             if flags == 17:
                 # shift
-                next = len(self.clusters)
+                a = find_object_for_point(point, self.clusters, False)
+                self.change_cluster(a, backwards=True)
             elif flags == 9:
                 # ctrl
-                next = len(self.clusters)
+                a = find_object_for_point(point, self.clusters, False)
+                self.change_cluster(a, backwards=False)
+            else:
+                a = find_object_for_point(point, self.clusters, True)
 
             self.refresh_on_next = True
 
@@ -291,7 +313,7 @@ class BigTing():
     def __init__(self):
         self.context: Context = Context()
         self.sock: Socket = self.context.socket(zmq.PAIR)
-        self.sock.bind("tcp://*:5557")
+        self.sock.bind(ZMQ_SERVERNAME)
         self.op = True
         self.stats_img = None
         self.window = ImageWindow()
@@ -422,7 +444,7 @@ class BigTing():
         image_label.pack()
 
         controls_frame = tk.Frame(root)
-        controls_frame.pack(fill='both', expand=False)
+        controls_frame.pack(fill='both', expand=True)
 
         rad_btn_frame = tk.Frame(controls_frame)
         rad_btn_val = tk.BooleanVar()
@@ -457,17 +479,17 @@ class BigTing():
             io.pack()
 
         btn_frame = tk.Frame(controls_frame)
-        btn_frame.pack(fill='both', expand=True)
+        btn_frame.pack(fill='y', expand=True)
 
         stat_btn_frame = tk.Frame(btn_frame)
-        stat_btn_frame.pack(fill='y', expand=True)
+        stat_btn_frame.pack(fill='y', expand=False)
 
         button1 = tk.Button(stat_btn_frame, text="Show Stats",
                             command=placeholder_func)
         button2 = tk.Button(stat_btn_frame, text="Save Stats",
                             command=placeholder_func)
         button3 = tk.Button(btn_frame, text="Dis-/Enable Contours",
-                            command=self.window.disable_contours)
+                            command=self.window.toggle_contours)
         button1.pack(side=tk.LEFT)
         button2.pack(side=tk.LEFT)
         button3.pack()
@@ -518,15 +540,14 @@ def put_text(img: np.ndarray,
     return im
 
 
-def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)" = (0, 0), width=200):
+def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)" = (0, 0), width=260):
     image = img.copy()
 
-    offset_y, offset_x = 20, 10
-    line_h = 30
+    offset_y, offset_x = 30, 20
+    line_h = 40
 
     point = (start_point[0], start_point[1])
-    end_point = (point[0] + width, point[1] + len(lines) * line_h)
-    shape = (end_point[0] - point[0]), (end_point[0] - point[0])
+    end_point = (point[0] + len(lines) * line_h, point[1] + width)
 
     # Ensuring that the textbox is visible
     diff = (img.shape[1] - end_point[0], img.shape[0] - end_point[1])
@@ -538,17 +559,18 @@ def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)" =
         end_point = (end_point[0], end_point[1] + diff[1])
 
     # Creating box
+    box_end_point = (end_point[0], end_point[1] + offset_y)
     image = cv.rectangle(
-        image, point, end_point, (0, 0, 0), 3)
+        image, point, box_end_point, (0, 0, 0), 3)
     image = cv.rectangle(
-        image, point, end_point, (240, 240, 240), -1)
+        image, point, box_end_point, (240, 240, 240), -1)
 
     # Inserting lines of text
     point = (point[0] + offset_x, point[1] + offset_y)
     for line in lines:
         image = put_text(image, str(line), point, font=cv.FONT_HERSHEY_PLAIN)
         point = (point[0], point[1] + line_h)
-    return image, image[start_point[0]:end_point[0] - offset_y, start_point[1]:end_point[1]]
+    return image, image[start_point[0]:end_point[0], start_point[1]:end_point[1]]
 
 
 def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", disable=False) -> ObjectParams or None:
@@ -557,27 +579,27 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
             continue
 
         for j, contour in enumerate(cluster.contours):
+
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
+
                 # Move to disabled list if disabling is turned on
                 if disable:
-                    # terminal_text.event(
-                    # f"Disabling {cluster.name} cluster's #{j} object")
                     cluster.disable_contour(j)
-                    print("Contour disabled")
                     return ObjectParams(cluster.name, len(cluster.disabled_contours) - 1, cv.contourArea(contour), centroid_for_contour(contour), True)
+
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
 
         for j, contour in enumerate(cluster.disabled_contours):
+
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
+
                 # Move to enabled list if disabling is turned on
                 if disable:
-                    # terminal_text.event(
-                    # f"Enabling {cluster.name} cluster's #{j} object")
                     cluster.enable_contour(j)
-                    print("Contour enabled")
                     return ObjectParams(cluster.name, len(cluster.contours) - 1, cv.contourArea(contour), centroid_for_contour(contour), False)
+
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), True)
     return None
 
