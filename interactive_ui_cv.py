@@ -442,8 +442,6 @@ class ImageWindow():
                         if not result.disabled:
                             mod = len(self.clusters)
                             next_i = (self.clusters.index(cl) + 1) % mod
-                            # terminal_text.event(
-                            # f"Changing cluster of object from {result.cluster} to {self.clusters[next_i].name}")
                             self.clusters[next_i].contours.append(
                                 cl.contours.pop(result.indx))
                             self.refresh_img()

@@ -21,7 +21,7 @@ ALIVE = 'ALIVE'
 EXIT = 'EXIT'
 UNKNOWN = 'UNKNOWN'
 
-ZMQ_SERVERNAME = "tcp://*:5557"
+ZMQ_SERVERNAME = "tcp://*:5560"
 
 
 def start_new_thread(fc):
@@ -97,8 +97,8 @@ class ImageWindow():
         ]
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
-        self.th_c = 121
-        self.blocksize = 121
+        self.th_c = 60
+        self.blocksize = 251
         self.show_contours = True
         self.refresh_on_next = False
         self.edit = True
@@ -111,7 +111,7 @@ class ImageWindow():
 
         # Mouse event callbacks
         cv.setMouseCallback(self.name, self.on_mouse_event)
-        self.create_ui_controls()
+        # self.create_ui_controls()
 
     def set_base_image(self, img: np.ndarray) -> None:
         self.og_img = img.copy()
@@ -211,8 +211,8 @@ class ImageWindow():
         for cl in self.clusters:
             if not cl.checked:
                 continue
-            cv.drawContours(im, cl.contours, -1, cl.color, 1)
-            cv.drawContours(im, cl.disabled_contours, -1, (100, 100, 100), 1)
+            cv.drawContours(im, cl.contours, -1, cl.color, 2)
+            cv.drawContours(im, cl.disabled_contours, -1, (100, 100, 100), 2)
         self.contour_img = im
 
         self.refresh_on_next = True
@@ -295,6 +295,7 @@ class ImageWindow():
         print(f"flags: {flags}")
 
         if event == 4:
+            """
             if flags == 17:
                 # shift
                 a = find_object_for_point(point, self.clusters, False)
@@ -303,10 +304,15 @@ class ImageWindow():
                 # ctrl
                 a = find_object_for_point(point, self.clusters, False)
                 self.change_cluster(a, backwards=False)
-            else:
-                a = find_object_for_point(point, self.clusters, True)
+            else:"""
+            a = find_object_for_point(point, self.clusters, True)
 
-            self.refresh_on_next = True
+        elif event == 2:
+            a = find_object_for_point(point, self.clusters, False)
+            if a is not None:
+                self.change_cluster(a, backwards=False)
+
+        self.refresh_on_next = True
 
 
 class BigTing():
@@ -333,7 +339,6 @@ class BigTing():
 
     def pong(self):  # Answer to ping
         self.sock.send_string(ALIVE)
-        print(PING)
 
     def confirm_req(self):  # Sends confirmation of received request
         print("Sending confirmation of received request")
@@ -358,6 +363,7 @@ class BigTing():
         self.confirm_req()
         message = self.sock.recv_pyobj()
         try:
+            message = cv.cvtColor(message, cv.COLOR_BGR2RGB)
             self.window.set_base_image(message)
             self.confirm_req_complete()
         except:
