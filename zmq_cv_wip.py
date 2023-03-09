@@ -104,11 +104,11 @@ class ImageWindow():
         self.edit = True
         self.stats = None
 
-        cv.namedWindow(self.name)
+        cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE | cv.WINDOW_KEEPRATIO)
 
         self.set_base_image(cv.imread("cells_6.jpg"))
         self.show_img()
-
+        self.update_contour_img()
         # Mouse event callbacks
         cv.setMouseCallback(self.name, self.on_mouse_event)
         # self.create_ui_controls()
@@ -165,10 +165,16 @@ class ImageWindow():
         print(args)
         pass
 
-    def on_toggle_mode(self, *args):
-        print("on_toggle_mode:")
-        self.edit = not self.edit
+    def toggle_select_mode(self):
+        print("SELECT MODE")
+        self.edit = False
         self.refresh_on_next = True
+
+    def toggle_edit_mode(self):
+        print("EDIT MODE")
+        self.edit = True
+        self.refresh_on_next = True
+        
 
     def on_display_stats(self, *args):
         # TODO!
@@ -235,18 +241,22 @@ class ImageWindow():
             list(map(lambda cl: cl.contour_count(), self.clusters))
         )
 
-        indexes = list(map(lambda cl: cl.name, self.clusters))
+        indexes1 = list(map(lambda cl: cl.name, self.clusters))
 
         if not all:
             frame = {'Count': np.zeros(
                 len(lengths),), 'Percentage': np.zeros(len(lengths),)}
         else:
-            frame = {'Count': pd.Series(lengths, index=indexes),
-                     'Percentage': pd.Series((lengths / enabled) * 100, index=indexes)}
+            frame = {'Count': pd.Series(lengths, index=indexes1),
+                     'Percentage': pd.Series((lengths / enabled) * 100, index=indexes1)}
 
-        df1 = pd.DataFrame(frame, index=indexes)
-        df2 = pd.DataFrame({'Count': [enabled, disabled, all],
-                            'Percentage': [100*enabled/all, 100*disabled/all, int(100), ]}, index=['enabled', 'disabled', 'all', ])
+        count = [enabled, disabled, all]
+        percentage = [100 * enabled / all, 100 * disabled / all, int(100)]
+        indexes2 = ['enabled', 'disabled', 'all', ]
+
+        df1 = pd.DataFrame(frame, index=indexes1)
+        df2 = pd.DataFrame({'Count': count,
+                            'Percentage': percentage}, index=indexes2)
         res = pd.concat(objs=[df1, df2])
 
         self.stats = res
@@ -260,7 +270,6 @@ class ImageWindow():
 
     def claster_by_name(self, cluster_name: str) -> Cluster:
         index = list(map(lambda x: x.name, self.clusters)).index(cluster_name)
-        print(self.clusters[index])
         return self.clusters[index]
 
     def change_cluster(self, params: ObjectParams, backwards=False):
@@ -295,7 +304,7 @@ class ImageWindow():
         print(f"flags: {flags}")
 
         if event == 4:
-            """
+            
             if flags == 17:
                 # shift
                 a = find_object_for_point(point, self.clusters, False)
@@ -304,8 +313,8 @@ class ImageWindow():
                 # ctrl
                 a = find_object_for_point(point, self.clusters, False)
                 self.change_cluster(a, backwards=False)
-            else:"""
-            a = find_object_for_point(point, self.clusters, True)
+            else:
+                a = find_object_for_point(point, self.clusters, True)
 
         elif event == 2:
             a = find_object_for_point(point, self.clusters, False)
@@ -387,6 +396,7 @@ class BigTing():
             await asyncio.sleep(0)
 
         self.sock.close()
+        self.tk.quit()
         await asyncio.sleep(0)
         print('ZMQ Coroutine is done')
 
@@ -424,7 +434,9 @@ class BigTing():
                 break
 
             await asyncio.sleep(0)
+        
         cv.destroyAllWindows()
+        self.tk.quit()
 
         # Awaiting end
         await asyncio.sleep(0)
@@ -457,9 +469,9 @@ class BigTing():
         rad_btn_frame.pack()
 
         R1 = tk.Radiobutton(rad_btn_frame, text="SELECT", variable=rad_btn_val, value=True,
-                            command=placeholder_func)
+                            command=self.window.toggle_select_mode)
         R2 = tk.Radiobutton(rad_btn_frame, text="EDIT", variable=rad_btn_val, value=False,
-                            command=placeholder_func)
+                            command=self.window.toggle_edit_mode)
 
         R1.pack(anchor=tk.W, side=tk.LEFT)
         R2.pack(anchor=tk.W, side=tk.LEFT)
@@ -499,6 +511,11 @@ class BigTing():
         button1.pack(side=tk.LEFT)
         button2.pack(side=tk.LEFT)
         button3.pack()
+
+        def on_closing():
+            self.op = False
+
+        root.protocol("WM_DELETE_WINDOW", on_closing)
 
         root.mainloop()
 
