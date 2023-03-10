@@ -51,6 +51,7 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
         'cl3', '#FF8800').add('cl4', '#FF0000')
     out.processing.tile_size = 1024
     out.processing.tile_border_size = 128
+    out.processing.zoom = 2.5
     isPreview = inp.environment.is_preview_segmentation
     pythonPath = inp.environment.python_path
     externalprocesspath = inp.environment.app_path + \
@@ -102,6 +103,7 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
         print("External process is not responding.")
     except Exception as e:
         print("External process has exited.")
+        print(e)
 
 # This function only be used for close, delete all reserved resources.
 # Called when script/scenario/quantcenter closed, or in processing after end_tiling function finished.

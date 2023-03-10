@@ -40,13 +40,6 @@ class ObjectParams():
     def __str__(self) -> str:
         return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}; index: {self.indx}; area: {self.area}; center: {self.center}"
 
-    def put_params_on_image(self, img: np.ndarray, org: "tuple(int, int)", *kwargs) -> np.ndarray:
-        lines = self.__str__().split(sep="; ")
-        lines.pop(1)
-        image, textbox = put_textbox_on_img(
-            img, lines, (org[0] + 10, org[1]), 175)
-        return image
-
 
 class Cluster():
     """ Class for a class of identified objects
@@ -66,7 +59,6 @@ class Cluster():
         self.disabled_contours.append(self.contours.pop(index))
 
     def enable_contour(self, index: int) -> None:
-        print("enable contour")
         self.contours.append(self.disabled_contours.pop(index))
 
     @property
@@ -103,12 +95,13 @@ class ImageWindow():
         self.refresh_on_next = False
         self.edit = True
         self.stats = None
+        self.stats_img = None
 
         cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE | cv.WINDOW_KEEPRATIO)
 
-        self.set_base_image(cv.imread("cells_6.jpg"))
-        self.show_img()
-        self.update_contour_img()
+        # self.set_base_image(cv.imread("cells_6.jpg"))
+        # self.show_img()
+        # self.update_contour_img()
         # Mouse event callbacks
         cv.setMouseCallback(self.name, self.on_mouse_event)
         # self.create_ui_controls()
@@ -142,6 +135,7 @@ class ImageWindow():
         if not len(contours_map):
             return
 
+        # Classification
         mx, mn = max(contours_map), min(contours_map)
         diff = (mx - mn) / 4
 
@@ -160,11 +154,6 @@ class ImageWindow():
                 self.clusters[3].contours.append(cont)
         return c
 
-    def on_toggle_cluster(self, *args):
-        print("on_toggle_cluster:")
-        print(args)
-        pass
-
     def toggle_select_mode(self):
         print("SELECT MODE")
         self.edit = False
@@ -174,12 +163,6 @@ class ImageWindow():
         print("EDIT MODE")
         self.edit = True
         self.refresh_on_next = True
-        
-
-    def on_display_stats(self, *args):
-        # TODO!
-        print("on_display_stats:")
-        print(args)
 
     def save_data(self, *args):
         # TODO!
@@ -188,6 +171,7 @@ class ImageWindow():
         pass
 
     def set_block_size(self, val, *args):
+        """!!!DEPRECATED!!!"""
         print(f"set_block_size: {val}")
         if val % 2 == 0:
             if val > 1:
@@ -198,11 +182,13 @@ class ImageWindow():
         self.update_contour_img()
 
     def set_c_value(self, val, *args):
+        """!!!DEPRECATED!!!"""
         print(f"set_c_value: {val}")
         self.th_c = val
         self.update_contour_img()
 
     def create_ui_controls(self):
+        """!!!DEPRECATED!!!"""
         cv.createTrackbar('Block size:', self.name,
                           self.blocksize, 255, self.set_block_size)
 
@@ -300,28 +286,33 @@ class ImageWindow():
             return
 
         point = (x, y)
-        print(f"event: {event}")
-        print(f"flags: {flags}")
 
-        if event == 4:
-            
-            if flags == 17:
-                # shift
-                a = find_object_for_point(point, self.clusters, False)
-                self.change_cluster(a, backwards=True)
-            elif flags == 9:
-                # ctrl
-                a = find_object_for_point(point, self.clusters, False)
-                self.change_cluster(a, backwards=False)
-            else:
-                a = find_object_for_point(point, self.clusters, True)
+        if self.edit:
+            if event == 4:
+                """if flags == 17:
+                    # shift
+                    obj = find_object_for_point(point, self.clusters, False)
+                    self.change_cluster(obj, backwards=True)
+                elif flags == 9:
+                    # ctrl
+                    obj = find_object_for_point(point, self.clusters, False)
+                    self.change_cluster(obj, backwards=False)"""
+                obj = find_object_for_point(point, self.clusters, True)
 
-        elif event == 2:
-            a = find_object_for_point(point, self.clusters, False)
-            if a is not None:
-                self.change_cluster(a, backwards=False)
+            elif event == 2:
+                (print("Rescore object"))
+                obj = find_object_for_point(point, self.clusters, False)
+                if obj is not None:
+                    self.change_cluster(obj, backwards=False)
 
-        self.refresh_on_next = True
+            self.refresh_on_next = True
+        else:
+            if event == 4: 
+                (print("Select object"))
+                obj = find_object_for_point(point, self.clusters, False)
+                obj_stats_img= tb(obj.__str__().split("; "))
+                self.stats_img = obj_stats_img
+                self.refresh_on_next = True
 
 
 class BigTing():
@@ -330,7 +321,6 @@ class BigTing():
         self.sock: Socket = self.context.socket(zmq.PAIR)
         self.sock.bind(ZMQ_SERVERNAME)
         self.op = True
-        self.stats_img = None
         self.window = ImageWindow()
         self.tk = None
         self.tk_photo = None
@@ -419,14 +409,17 @@ class BigTing():
             if self.window.refresh_on_next:
                 self.window.show_img()
 
-                st, lines = self.window.extract_stats()
-                im, st_im = put_textbox_on_img(self.window.og_img, lines)
-                self.stats_img = st_im
+                if self.window.edit:
+                    st, lines = self.window.extract_stats()
+                    st_im = tb(lines)
+                    self.window.stats_img = st_im
+                    
+
                 self.change_stats_image()
                 self.window.update_contour_img(False)
                 self.window.refresh_on_next = False
 
-            key = cv.waitKey(100)
+            key = cv.waitKey(250)
 
             # Breaks infinite loop if SPACE is pressed OR OpenCV window is closed
             if key == 32 or cv.getWindowProperty(self.window.name, cv.WND_PROP_VISIBLE) < 1:
@@ -434,7 +427,7 @@ class BigTing():
                 break
 
             await asyncio.sleep(0)
-        
+
         cv.destroyAllWindows()
         self.tk.quit()
 
@@ -450,8 +443,8 @@ class BigTing():
         image_frame = tk.Frame(root)
         image_frame.pack(side='left', fill='both')
 
-        if self.stats_img is not None:
-            im = Image.fromarray(self.stats_img)
+        if self.window.stats_img is not None:
+            im = Image.fromarray(self.windwo.stats_img)
         else:
             im = Image.fromarray(np.zeros((200, 200)))
 
@@ -476,24 +469,21 @@ class BigTing():
         R1.pack(anchor=tk.W, side=tk.LEFT)
         R2.pack(anchor=tk.W, side=tk.LEFT)
 
-        checkButtons = {}
+        check_buttons = {}
 
-        clusters = [Cluster("c1", (40, 150, 40)), Cluster("c2", (110, 150, 40)), Cluster(
-
-            "c3", (110, 150, 40)), Cluster("c4", (110, 150, 40))]
+        clusters = self.window.clusters
         cb_vals = [tk.BooleanVar(value=True) for i in clusters]
 
         def checkbox_update():
             for i, val in enumerate(cb_vals):
                 self.window.clusters[i].checked = val.get()
-            print([i.checked for i in self.window.clusters])
-            self.window.update_contour_img()
+            self.window.refresh_on_next = True
 
         for i, cluster in enumerate(clusters):
-            checkButtons.update({cluster.name: tk.Checkbutton(controls_frame, text=cluster.name,
-                                variable=cb_vals[i], onvalue=1, offvalue=0, width=1, command=checkbox_update)})
+            check_buttons.update({cluster.name: tk.Checkbutton(controls_frame, text=cluster.name,
+                                                               variable=cb_vals[i], onvalue=1, offvalue=0, width=1, command=checkbox_update)})
 
-        for io in checkButtons.values():
+        for io in check_buttons.values():
             io.pack()
 
         btn_frame = tk.Frame(controls_frame)
@@ -520,7 +510,7 @@ class BigTing():
         root.mainloop()
 
     def change_stats_image(self):
-        im = Image.fromarray(self.stats_img)
+        im = Image.fromarray(self.window.stats_img)
         photo = ImageTk.PhotoImage(image=im)
 
         self.tk_photo.configure(image=photo)
@@ -549,51 +539,18 @@ def placeholder_func(*args):
 
 
 def put_text(img: np.ndarray,
-             text: str,
-             org: "tuple(int, int)",
-             font=cv.FONT_HERSHEY_PLAIN,
-             fontScale: int = 1,
-             colors: "tuple(tuple(int, int, int), tuple(int, int, int))" = (
-                 (0, 0, 0), (255, 255, 255)),
-             thickness: int = 3) -> np.ndarray:
-    im = cv.putText(img.copy(), text, org, font, fontScale,
+                text: str,
+                org: "tuple(int, int)",
+                font=cv.FONT_HERSHEY_SIMPLEX,
+                fontScale: int = 1,
+                colors: "tuple(tuple(int, int, int), tuple(int, int, int))" = (
+                    (0, 0, 0), (255, 255, 255)),
+                thickness: int = 3) -> np.ndarray:
+    im = cv.putText(img, text, org, font, fontScale,
                     colors[0], thickness, cv.LINE_AA)
     im = cv.putText(im, text, org, font, fontScale,
                     colors[1], 1, cv.LINE_AA)
     return im
-
-
-def put_textbox_on_img(img, lines: "list[str]", start_point: "tuple(int, int)" = (0, 0), width=260):
-    image = img.copy()
-
-    offset_y, offset_x = 30, 20
-    line_h = 40
-
-    point = (start_point[0], start_point[1])
-    end_point = (point[0] + len(lines) * line_h, point[1] + width)
-
-    # Ensuring that the textbox is visible
-    diff = (img.shape[1] - end_point[0], img.shape[0] - end_point[1])
-    if diff[0] < 0:
-        point = (point[0] + diff[0], point[1])
-        end_point = (end_point[0] + diff[0], end_point[1])
-    if diff[1] < 0:
-        point = (point[0], point[1] + diff[1])
-        end_point = (end_point[0], end_point[1] + diff[1])
-
-    # Creating box
-    box_end_point = (end_point[0], end_point[1] + offset_y)
-    image = cv.rectangle(
-        image, point, box_end_point, (0, 0, 0), 3)
-    image = cv.rectangle(
-        image, point, box_end_point, (240, 240, 240), -1)
-
-    # Inserting lines of text
-    point = (point[0] + offset_x, point[1] + offset_y)
-    for line in lines:
-        image = put_text(image, str(line), point, font=cv.FONT_HERSHEY_PLAIN)
-        point = (point[0], point[1] + line_h)
-    return image, image[start_point[0]:end_point[0], start_point[1]:end_point[1]]
 
 
 def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", disable=False) -> ObjectParams or None:
@@ -632,6 +589,28 @@ def centroid_for_contour(contour):
     cx = int(M['m10'] / M['m00'])
     cy = int(M['m01'] / M['m00'])
     return (cx, cy)
+
+
+def tb(lines: "list[str]"):
+    LINE_H = 40
+    OFFSET_X = 10
+    OFFSET_Y = 10
+    CHAR_W = 18
+
+    end_h = len(lines) * LINE_H + OFFSET_Y
+    end_w = max(list(map(lambda x: len(x), lines)))
+
+    im = np.zeros((end_h, end_w * CHAR_W, 3), dtype=np.uint8)
+    cv.rectangle(im, (0, 0), (end_w * CHAR_W, end_h), (240, 240, 240), -1)
+
+    point = (OFFSET_X, LINE_H - OFFSET_Y)
+    for line in lines:
+
+        put_text(im, line, point)
+        point = (point[0], point[1] + LINE_H)
+    
+        
+    return im
 
 
 if __name__ == "__main__":
