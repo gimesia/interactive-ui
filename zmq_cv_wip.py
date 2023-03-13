@@ -73,9 +73,17 @@ class Cluster():
                 "properties": {
                     "index": i,
                     "area": cv.contourArea(contour),
-                    "center": 0  # centroid_for_contour(contour)
+                    "center": centroid_for_contour(contour)
                 }})
-        return {"type": "FeatureCollection", "features": features, "properties": {"cluster": self.name, "index": i}}
+        feat_coll = {
+            "type": "FeatureCollection",
+            "features": features,
+            "properties": {
+                "cluster": self.name,
+                "index": i
+            }            
+        }
+        return feat_coll
 
 
 class ImageWindow():
@@ -99,9 +107,11 @@ class ImageWindow():
 
         cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE | cv.WINDOW_KEEPRATIO)
 
-        # self.set_base_image(cv.imread("cells_6.jpg"))
-        # self.show_img()
-        # self.update_contour_img()
+
+        self.set_base_image(cv.imread("cells_6.jpg"))
+        self.show_img()
+        self.update_contour_img()
+        
         # Mouse event callbacks
         cv.setMouseCallback(self.name, self.on_mouse_event)
         # self.create_ui_controls()
@@ -120,7 +130,12 @@ class ImageWindow():
         self.show_contours = not self.show_contours
         self.refresh_on_next = True
 
-    def ath(self, block: int = 151, c: int = 150):
+    def ath(self):
+        """TODO: BOTI CHANGE THIS!!!
+
+        Returns:
+            clusters: Classified clusters with the stored contours 
+        """
         img = self.og_img.copy()
         gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
@@ -130,13 +145,13 @@ class ImageWindow():
         contours, h = cv.findContours(
             th, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-        contours_map = list(map(lambda x: cv.contourArea(x), contours))
+        contours_map = list((map(lambda x: cv.contourArea(x), contours)))
 
         if not len(contours_map):
-            return
+            return contours
 
         # Classification
-        mx, mn = max(contours_map), min(contours_map)
+        mx, mn = max(contours_map), 100#min(contours_map)
         diff = (mx - mn) / 4
 
         for cl in self.clusters:
@@ -144,6 +159,10 @@ class ImageWindow():
             cl.disabled_contours = []
 
         for i, cont in enumerate(contours):
+            # Filter out small specs 
+            if contours_map[i] < 100:
+                continue
+            
             if contours_map[i] < mn + diff:
                 self.clusters[0].contours.append(cont)
             elif contours_map[i] < mn + 2 * diff:
@@ -152,7 +171,7 @@ class ImageWindow():
                 self.clusters[2].contours.append(cont)
             else:
                 self.clusters[3].contours.append(cont)
-        return c
+        return self.clusters
 
     def toggle_select_mode(self):
         print("SELECT MODE")
@@ -242,7 +261,8 @@ class ImageWindow():
 
         df1 = pd.DataFrame(frame, index=indexes1)
         df2 = pd.DataFrame({'Count': count,
-                            'Percentage': percentage}, index=indexes2)
+                            'Percentage': percentage},
+                           index=indexes2)
         res = pd.concat(objs=[df1, df2])
 
         self.stats = res
@@ -250,7 +270,8 @@ class ImageWindow():
         lines = []
         for index, row in res.iterrows():
             lines.append(
-                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2) if bool(row['Count']) else '0'}%)")
+                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2) if bool(row['Count']) else '0'}%)"
+            )
 
         return res, lines
 
@@ -275,7 +296,6 @@ class ImageWindow():
 
     def on_mouse_event(self, event, x: int, y: int, flags, *args) -> None:
         """Mouse event listener with all the respective actions to be listened to (click, dblclick, hover, etc.)
-
 
         Args:
             event (str): type of the mouse event
@@ -310,7 +330,7 @@ class ImageWindow():
             if event == 4: 
                 (print("Select object"))
                 obj = find_object_for_point(point, self.clusters, False)
-                obj_stats_img= tb(obj.__str__().split("; "))
+                obj_stats_img= textbox(obj.__str__().split("; "))
                 self.stats_img = obj_stats_img
                 self.refresh_on_next = True
 
@@ -333,6 +353,8 @@ class BigTing():
             self.receive_image()
         elif msg == EXIT:
             self.confirm_exit(True)
+        elif msg == QUERY_CONTOUR:
+            self.sock.send_pyobj(f"")
         else:
             self.sock.send_string(f"{msg}")
 
@@ -411,7 +433,7 @@ class BigTing():
 
                 if self.window.edit:
                     st, lines = self.window.extract_stats()
-                    st_im = tb(lines)
+                    st_im = textbox(lines)
                     self.window.stats_img = st_im
                     
 
@@ -422,7 +444,8 @@ class BigTing():
             key = cv.waitKey(250)
 
             # Breaks infinite loop if SPACE is pressed OR OpenCV window is closed
-            if key == 32 or cv.getWindowProperty(self.window.name, cv.WND_PROP_VISIBLE) < 1:
+            if key == 32 or cv.getWindowProperty(self.window.name,
+                                                 cv.WND_PROP_VISIBLE) < 1:
                 self.op = False
                 break
 
@@ -461,10 +484,10 @@ class BigTing():
         rad_btn_val = tk.BooleanVar()
         rad_btn_frame.pack()
 
-        R1 = tk.Radiobutton(rad_btn_frame, text="SELECT", variable=rad_btn_val, value=True,
-                            command=self.window.toggle_select_mode)
-        R2 = tk.Radiobutton(rad_btn_frame, text="EDIT", variable=rad_btn_val, value=False,
-                            command=self.window.toggle_edit_mode)
+        R1 = tk.Radiobutton(rad_btn_frame, text="SELECT", variable=rad_btn_val,
+                            value=True, command=self.window.toggle_select_mode)
+        R2 = tk.Radiobutton(rad_btn_frame, text="EDIT", variable=rad_btn_val,
+                            value=False, command=self.window.toggle_edit_mode)
 
         R1.pack(anchor=tk.W, side=tk.LEFT)
         R2.pack(anchor=tk.W, side=tk.LEFT)
@@ -480,8 +503,17 @@ class BigTing():
             self.window.refresh_on_next = True
 
         for i, cluster in enumerate(clusters):
-            check_buttons.update({cluster.name: tk.Checkbutton(controls_frame, text=cluster.name,
-                                                               variable=cb_vals[i], onvalue=1, offvalue=0, width=1, command=checkbox_update)})
+            check_buttons.update({
+                cluster.name: tk.Checkbutton(
+                    controls_frame,
+                    text=cluster.name,
+                    variable=cb_vals[i],
+                    onvalue=1,
+                    offvalue=0,
+                    width=1,
+                    command=checkbox_update
+                )
+            })
 
         for io in check_buttons.values():
             io.pack()
@@ -553,13 +585,12 @@ def put_text(img: np.ndarray,
     return im
 
 
-def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", disable=False) -> ObjectParams or None:
+def find_object_for_point(point: "tuple[int,int]",clusters: "list[Cluster]",disable=False)-> ObjectParams or None:
     for cluster in clusters:
         if not cluster.checked:
             continue
 
         for j, contour in enumerate(cluster.contours):
-
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
 
@@ -571,7 +602,6 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
                 return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
 
         for j, contour in enumerate(cluster.disabled_contours):
-
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
 
@@ -591,7 +621,7 @@ def centroid_for_contour(contour):
     return (cx, cy)
 
 
-def tb(lines: "list[str]"):
+def textbox(lines: "list[str]"):
     LINE_H = 40
     OFFSET_X = 10
     OFFSET_Y = 10
@@ -608,8 +638,7 @@ def tb(lines: "list[str]"):
 
         put_text(im, line, point)
         point = (point[0], point[1] + LINE_H)
-    
-        
+            
     return im
 
 
