@@ -9,6 +9,10 @@ import pandas as pd
 from zmq import Context, Socket
 import zmq
 from PIL import Image, ImageTk
+from stardist.models import StarDist2D
+from stardist.nms import non_maximum_suppression
+from stardist.geometry import dist_to_coord
+from colour_deconvolution import ColourDeconvolution
 
 PING = 'PING'
 THRESHOLD_INFO = 'THRESHOLD_INFO'
@@ -23,6 +27,85 @@ UNKNOWN = 'UNKNOWN'
 
 ZMQ_SERVERNAME = "tcp://*:5560"
 
+reference_umpp = 0.125
+
+colour_deconv = ColourDeconvolution(
+    [
+        [0.650, 0.704, 0.286],
+        [0.268, 0.570, 0.776],
+        # [0, 0, 0]
+    ]
+)
+
+model = StarDist2D.from_pretrained('2D_versatile_fluo')
+
+
+def predict_contours(
+        stardist_model: StarDist2D,
+        image: np.ndarray,
+        prob_thresh: float = 0.5,
+        nms_thresh: float = 0.5,
+        predict_kwargs: dict = {},
+        nms_kwargs: dict = {}
+) -> np.ndarray:
+    """
+    Predict contours from images by StarDist2D models.
+
+    Parameters
+    ----------
+    stardist_model : StarDist2D
+        The the trained stardist 2D model which we want to use for prediction.
+    image : ndarray
+        The image on which we want to predict.
+    prob_thresh : float, optional
+        Probability threshold for non-maximum suppression selection of
+        the best contours.
+        The default is 0.5 .
+    nms_thresh : TYPE, optional
+        Non-maximum suppression threshold for selection of
+        the best contours.
+        The default is 0.5 .
+    predict_kwargs : dict, optional
+        Keyword arguments for predict method of the stardist 2D model.
+        The default is {}.
+    nms_kwargs : dict, optional
+        Keyword arguments for non_maximum_suppression function.
+        The default is {}.
+
+    Returns
+    -------
+    contours : ndarray
+        Array of predicted contours. The contours are arrays of x, y point
+        coordinate tuples.
+
+    """
+    probabilities, distances = stardist_model.predict(
+        image,
+        **predict_kwargs
+    )
+    star_centre_points, probabilities, distances = non_maximum_suppression(
+        distances,
+        probabilities,
+        grid=stardist_model.config.grid,
+        prob_thresh=prob_thresh,
+        nms_thresh=nms_thresh,
+        **nms_kwargs
+    )
+    coordinates = dist_to_coord(
+        distances,
+        star_centre_points,
+    )
+    contours = np.transpose(  # Transforming to list of list of points format
+        coordinates,
+        [0, 2, 1]
+    )
+    contours = np.take(  # transforming from height, width to x, y coordinates.
+        contours,
+        [1, 0],
+        axis=2
+    )
+    return contours
+
 
 def start_new_thread(fc):
     thread = threading.Thread(target=fc)
@@ -30,24 +113,26 @@ def start_new_thread(fc):
 
 
 class ObjectParams():
-    def __init__(self, cluster_name, i, area, center, disabled):
+    def __init__(self, cluster_name, cl_i, i, area, center, disabled):
         self.cluster = cluster_name
-        self.indx = i
+        self.cl_i = cl_i
+        self.cnt_i = i
         self.area = area
         self.center = center
         self.disabled = disabled
 
     def __str__(self) -> str:
-        return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}; index: {self.indx}; area: {self.area}; center: {self.center}"
+        return f"cluster: {self.cluster}{' (disabled)' if self.disabled else ''}; index: {self.cnt_i}; area: {self.area}; center: {self.center}"
 
 
 class Cluster():
     """ Class for a class of identified objects
     """
 
-    def __init__(self, clustername: str, color):
+    def __init__(self, clustername: str, color, thicc):
         self.name = clustername
         self.color: tuple(int, int, int) = color
+        self.thicc: int = thicc
         self.checked = True
         self.contours = []
         self.disabled_contours = []
@@ -73,50 +158,43 @@ class Cluster():
                 "properties": {
                     "index": i,
                     "area": cv.contourArea(contour),
-                    "center": centroid_for_contour(contour)
+                    "center": 0  # centroid_for_contour(contour)
                 }})
-        feat_coll = {
-            "type": "FeatureCollection",
-            "features": features,
-            "properties": {
-                "cluster": self.name,
-                "index": i
-            }            
-        }
-        return feat_coll
+        return {"type": "FeatureCollection", "features": features, "properties": {"cluster": self.name, "index": i}}
 
 
 class ImageWindow():
     def __init__(self, name="Interactive UI"):
         self.name = name
+        # CREATE CLUSTERS
         self.clusters: list[Cluster] = [
-            Cluster("Cl1", (250, 106, 17)),
-            Cluster("Cl2", (107, 76, 254)),
-            Cluster("Cl3", (204, 137, 241)),
-            Cluster("Cl4", (62, 150, 81))
+            Cluster("Positive", (250, 106, 17), 2),
+            Cluster("Negative", (107, 76, 254), 1),
         ]
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
-        self.th_c = 60
-        self.blocksize = 251
         self.show_contours = True
         self.refresh_on_next = False
         self.edit = True
         self.stats = None
         self.stats_img = None
+        self.selected: ObjectParams = None
 
-        cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE | cv.WINDOW_KEEPRATIO)
+        cv.namedWindow(self.name, cv.WINDOW_NORMAL | cv.WINDOW_KEEPRATIO)
 
-
-        self.set_base_image(cv.imread("cells_6.jpg"))
+        """NOTE: BOTI
+        """
+        self.set_base_image(cv.imread(
+            "C:\\Users\\aron.gimesi\\Documents\\.repos\\DXIA-AlgoDev\\interactive ui\\img\\proto_img.tiff"))
         self.show_img()
         self.update_contour_img()
-        
+
         # Mouse event callbacks
         cv.setMouseCallback(self.name, self.on_mouse_event)
         # self.create_ui_controls()
 
     def set_base_image(self, img: np.ndarray) -> None:
+        # TODO Resize!        
         self.og_img = img.copy()
         self.contour_img = img.copy()
 
@@ -134,43 +212,29 @@ class ImageWindow():
         """TODO: BOTI CHANGE THIS!!!
 
         Returns:
-            clusters: Classified clusters with the stored contours 
+            clusters: Classified clusters with the stored contours
         """
+        global model
         img = self.og_img.copy()
-        gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
-        th = cv.adaptiveThreshold(
-            gray_img, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, self.blocksize, self.th_c)
+        concentration_maps = colour_deconv.get_concentration(
+            img,
+            normalisation="scale"
+        )
 
-        contours, h = cv.findContours(
-            th, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+        for stain_index, cluster in enumerate(self.clusters):
+            cluster.contours = list(
+                np.rint(
+                    predict_contours(
+                        model,
+                        concentration_maps[..., stain_index],
+                        prob_thresh=0.3,
+                        nms_thresh=0.1
+                    )
+                ).astype(int)
+            )
+            cluster.disabled_contours = []
 
-        contours_map = list((map(lambda x: cv.contourArea(x), contours)))
-
-        if not len(contours_map):
-            return contours
-
-        # Classification
-        mx, mn = max(contours_map), 100#min(contours_map)
-        diff = (mx - mn) / 4
-
-        for cl in self.clusters:
-            cl.contours = []
-            cl.disabled_contours = []
-
-        for i, cont in enumerate(contours):
-            # Filter out small specs 
-            if contours_map[i] < 100:
-                continue
-            
-            if contours_map[i] < mn + diff:
-                self.clusters[0].contours.append(cont)
-            elif contours_map[i] < mn + 2 * diff:
-                self.clusters[1].contours.append(cont)
-            elif contours_map[i] < mn + 3 * diff:
-                self.clusters[2].contours.append(cont)
-            else:
-                self.clusters[3].contours.append(cont)
         return self.clusters
 
     def toggle_select_mode(self):
@@ -181,6 +245,7 @@ class ImageWindow():
     def toggle_edit_mode(self):
         print("EDIT MODE")
         self.edit = True
+        self.selected = None
         self.refresh_on_next = True
 
     def save_data(self, *args):
@@ -188,31 +253,6 @@ class ImageWindow():
         print("save_data:")
         print(args)
         pass
-
-    def set_block_size(self, val, *args):
-        """!!!DEPRECATED!!!"""
-        print(f"set_block_size: {val}")
-        if val % 2 == 0:
-            if val > 1:
-                val += 1
-            else:
-                val = 3
-        self.blocksize = val
-        self.update_contour_img()
-
-    def set_c_value(self, val, *args):
-        """!!!DEPRECATED!!!"""
-        print(f"set_c_value: {val}")
-        self.th_c = val
-        self.update_contour_img()
-
-    def create_ui_controls(self):
-        """!!!DEPRECATED!!!"""
-        cv.createTrackbar('Block size:', self.name,
-                          self.blocksize, 255, self.set_block_size)
-
-        cv.createTrackbar('C value:', self.name,
-                          self.th_c, 255, self.set_c_value)
 
     def update_contour_img(self, segment=True) -> None:
         im = self.og_img.copy()
@@ -222,8 +262,19 @@ class ImageWindow():
         for cl in self.clusters:
             if not cl.checked:
                 continue
-            cv.drawContours(im, cl.contours, -1, cl.color, 2)
-            cv.drawContours(im, cl.disabled_contours, -1, (100, 100, 100), 2)
+            cv.drawContours(im, cl.contours, -1, cl.color, cl.thicc)
+            cv.drawContours(im, cl.disabled_contours, -
+                            1, (100, 100, 100), cl.thicc)
+        
+        if not self.edit:
+            if self.selected is not None:
+                cl_i, cnt_i = self.selected.cl_i, self.selected.cnt_i 
+                if self.selected.disabled:
+                    cnt = [self.clusters[cl_i].disabled_contours[cnt_i]]
+                else:
+                    cnt = [self.clusters[cl_i].contours[cnt_i]]
+                cv.drawContours(im, cnt, -1, (100, 200, 100), 2, cv.LINE_4)
+            
         self.contour_img = im
 
         self.refresh_on_next = True
@@ -261,8 +312,7 @@ class ImageWindow():
 
         df1 = pd.DataFrame(frame, index=indexes1)
         df2 = pd.DataFrame({'Count': count,
-                            'Percentage': percentage},
-                           index=indexes2)
+                            'Percentage': percentage}, index=indexes2)
         res = pd.concat(objs=[df1, df2])
 
         self.stats = res
@@ -270,8 +320,7 @@ class ImageWindow():
         lines = []
         for index, row in res.iterrows():
             lines.append(
-                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2) if bool(row['Count']) else '0'}%)"
-            )
+                f"{index}: {int(row['Count'])} ({round(row['Percentage'], 2) if bool(row['Count']) else '0'}%)")
 
         return res, lines
 
@@ -291,11 +340,12 @@ class ImageWindow():
         next %= len(self.clusters)
 
         self.clusters[next].contours.append(
-            cl.contours.pop(params.indx)
+            cl.contours.pop(params.cnt_i)
         )
 
     def on_mouse_event(self, event, x: int, y: int, flags, *args) -> None:
         """Mouse event listener with all the respective actions to be listened to (click, dblclick, hover, etc.)
+
 
         Args:
             event (str): type of the mouse event
@@ -309,28 +359,21 @@ class ImageWindow():
 
         if self.edit:
             if event == 4:
-                """if flags == 17:
-                    # shift
-                    obj = find_object_for_point(point, self.clusters, False)
-                    self.change_cluster(obj, backwards=True)
-                elif flags == 9:
-                    # ctrl
-                    obj = find_object_for_point(point, self.clusters, False)
-                    self.change_cluster(obj, backwards=False)"""
                 obj = find_object_for_point(point, self.clusters, True)
 
             elif event == 2:
-                (print("Rescore object"))
+                print("Rescore object")
                 obj = find_object_for_point(point, self.clusters, False)
                 if obj is not None:
                     self.change_cluster(obj, backwards=False)
 
             self.refresh_on_next = True
         else:
-            if event == 4: 
-                (print("Select object"))
+            if event == 4:
+                print("Select object")
                 obj = find_object_for_point(point, self.clusters, False)
-                obj_stats_img= textbox(obj.__str__().split("; "))
+                self.selected = obj
+                obj_stats_img = tb(obj.__str__().split("; "))
                 self.stats_img = obj_stats_img
                 self.refresh_on_next = True
 
@@ -353,8 +396,6 @@ class BigTing():
             self.receive_image()
         elif msg == EXIT:
             self.confirm_exit(True)
-        elif msg == QUERY_CONTOUR:
-            self.sock.send_pyobj(f"")
         else:
             self.sock.send_string(f"{msg}")
 
@@ -433,9 +474,8 @@ class BigTing():
 
                 if self.window.edit:
                     st, lines = self.window.extract_stats()
-                    st_im = textbox(lines)
+                    st_im = tb(lines)
                     self.window.stats_img = st_im
-                    
 
                 self.change_stats_image()
                 self.window.update_contour_img(False)
@@ -444,8 +484,7 @@ class BigTing():
             key = cv.waitKey(250)
 
             # Breaks infinite loop if SPACE is pressed OR OpenCV window is closed
-            if key == 32 or cv.getWindowProperty(self.window.name,
-                                                 cv.WND_PROP_VISIBLE) < 1:
+            if key == 32 or cv.getWindowProperty(self.window.name, cv.WND_PROP_VISIBLE) < 1:
                 self.op = False
                 break
 
@@ -461,6 +500,7 @@ class BigTing():
     def coroutine_controls(self):
         """Tkinter controls & stats window coroutine"""
         root = tk.Tk()
+        root.title("Controls & Statistics")
         self.tk = root
 
         image_frame = tk.Frame(root)
@@ -484,10 +524,10 @@ class BigTing():
         rad_btn_val = tk.BooleanVar()
         rad_btn_frame.pack()
 
-        R1 = tk.Radiobutton(rad_btn_frame, text="SELECT", variable=rad_btn_val,
-                            value=True, command=self.window.toggle_select_mode)
-        R2 = tk.Radiobutton(rad_btn_frame, text="EDIT", variable=rad_btn_val,
-                            value=False, command=self.window.toggle_edit_mode)
+        R1 = tk.Radiobutton(rad_btn_frame, text="SELECT", variable=rad_btn_val, value=True,
+                            command=self.window.toggle_select_mode)
+        R2 = tk.Radiobutton(rad_btn_frame, text="EDIT", variable=rad_btn_val, value=False,
+                            command=self.window.toggle_edit_mode)
 
         R1.pack(anchor=tk.W, side=tk.LEFT)
         R2.pack(anchor=tk.W, side=tk.LEFT)
@@ -503,17 +543,8 @@ class BigTing():
             self.window.refresh_on_next = True
 
         for i, cluster in enumerate(clusters):
-            check_buttons.update({
-                cluster.name: tk.Checkbutton(
-                    controls_frame,
-                    text=cluster.name,
-                    variable=cb_vals[i],
-                    onvalue=1,
-                    offvalue=0,
-                    width=1,
-                    command=checkbox_update
-                )
-            })
+            check_buttons.update({cluster.name: tk.Checkbutton(controls_frame, text=cluster.name,
+                                                               variable=cb_vals[i], onvalue=1, offvalue=0, width=1, command=checkbox_update)})
 
         for io in check_buttons.values():
             io.pack()
@@ -571,13 +602,13 @@ def placeholder_func(*args):
 
 
 def put_text(img: np.ndarray,
-                text: str,
-                org: "tuple(int, int)",
-                font=cv.FONT_HERSHEY_SIMPLEX,
-                fontScale: int = 1,
-                colors: "tuple(tuple(int, int, int), tuple(int, int, int))" = (
-                    (0, 0, 0), (255, 255, 255)),
-                thickness: int = 3) -> np.ndarray:
+             text: str,
+             org: "tuple(int, int)",
+             font=cv.FONT_HERSHEY_SIMPLEX,
+             fontScale: int = 1,
+             colors: "tuple(tuple(int, int, int), tuple(int, int, int))" = (
+                 (0, 0, 0), (255, 255, 255)),
+             thickness: int = 3) -> np.ndarray:
     im = cv.putText(img, text, org, font, fontScale,
                     colors[0], thickness, cv.LINE_AA)
     im = cv.putText(im, text, org, font, fontScale,
@@ -585,33 +616,36 @@ def put_text(img: np.ndarray,
     return im
 
 
-def find_object_for_point(point: "tuple[int,int]",clusters: "list[Cluster]",disable=False)-> ObjectParams or None:
-    for cluster in clusters:
+def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", disable=False) -> ObjectParams or None:
+    hits = []
+    for cl_i, cluster in enumerate(clusters):
         if not cluster.checked:
             continue
-
         for j, contour in enumerate(cluster.contours):
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
+                hits.append(ObjectParams(cluster.name, cl_i,  j, cv.contourArea(contour), centroid_for_contour(contour), False))
 
-                # Move to disabled list if disabling is turned on
-                if disable:
-                    cluster.disable_contour(j)
-                    return ObjectParams(cluster.name, len(cluster.disabled_contours) - 1, cv.contourArea(contour), centroid_for_contour(contour), True)
-
-                return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), False)
-
+    for cl_i, cluster in enumerate(clusters):
         for j, contour in enumerate(cluster.disabled_contours):
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
+                hits.append(ObjectParams(cluster.name, cl_i, j, cv.contourArea(contour), centroid_for_contour(contour), True))
+    if len(hits) == 1:
+        result: ObjectParams = hits[0]
+    elif len(hits) == 0:
+        return None
+    else:
+        result: ObjectParams = hits[np.argmin([x.area for x in hits])]
 
-                # Move to enabled list if disabling is turned on
-                if disable:
-                    cluster.enable_contour(j)
-                    return ObjectParams(cluster.name, len(cluster.contours) - 1, cv.contourArea(contour), centroid_for_contour(contour), False)
-
-                return ObjectParams(cluster.name, j, cv.contourArea(contour), centroid_for_contour(contour), True)
-    return None
+    if disable:
+        if result.disabled:
+            clusters[result.cl_i].enable_contour(result.cnt_i)
+            result.cnt_i = len(clusters[result.cl_i].contours) - 1 
+        else:
+            clusters[result.cl_i].disable_contour(result.cnt_i)
+            result.cnt_i = len(clusters[result.cl_i].disabled_contours) - 1 
+    return result
 
 
 def centroid_for_contour(contour):
@@ -621,7 +655,7 @@ def centroid_for_contour(contour):
     return (cx, cy)
 
 
-def textbox(lines: "list[str]"):
+def tb(lines: "list[str]"):
     LINE_H = 40
     OFFSET_X = 10
     OFFSET_Y = 10
@@ -638,7 +672,7 @@ def textbox(lines: "list[str]"):
 
         put_text(im, line, point)
         point = (point[0], point[1] + LINE_H)
-            
+
     return im
 
 
