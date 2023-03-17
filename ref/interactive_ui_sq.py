@@ -7,6 +7,7 @@
 import subprocess
 import datetime
 import zmq
+import numpy as np
 import quantification as qc
 from ast import Return
 info = {'title': 'Interactive UI', 'requirements': ['pyzmq']}
@@ -22,7 +23,7 @@ pythonPath = ""
 logfilepath = "e:\\Python scripts\\log.txt"
 REQUEST_RETRIES = 1
 REQUEST_TIMEOUT = 1000
-SERVER_ENDPOINT = "tcp://localhost:5555"
+SERVER_ENDPOINT = "tcp://localhost:5560"
 RETURN_TYPE_PYOBJ = 1
 RETURN_TYPE_STRING = 2
 RETURN_TYPE_UNKNOWN = 3
@@ -47,19 +48,19 @@ def start_process(thresholdinfo):
 
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     global context, socket, isPreview, pythonPath, externalprocesspath
-    out.clusters.add('cl1', '#0000FF').add('cl2', '#FFFF00').add(
-        'cl3', '#FF8800').add('cl4', '#FF0000')
+    out.clusters.add('cl1', '#FF0000').add('cl2', '#0000FF')#.add('cl3', '#FFFF00').add('cl4', '#FF8800')
     out.processing.tile_size = 1024
     out.processing.tile_border_size = 128
+    out.processing.zoom = 2.5
     isPreview = inp.environment.is_preview_segmentation
     pythonPath = inp.environment.python_path
     externalprocesspath = inp.environment.app_path + \
-        "\\ScriptQuant.Examples\\Usecases\\interactive_ui.py"
+        "\\ScriptQuant.Examples\\Usecases\\interactive_ui_cv.py"
     # Connect to the socket.
     context = zmq.Context()
-    socket = context.socket(zmq.REQ)
+    socket = context.socket(zmq.PAIR)
     socket.setsockopt(zmq.LINGER, 100)
-    socket.connect("tcp://localhost:5555")
+    socket.connect(SERVER_ENDPOINT)
 
     # Check if any data saved into the scenario.
     threshold_info = ''
@@ -102,6 +103,7 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
         print("External process is not responding.")
     except Exception as e:
         print("External process has exited.")
+        print(e)
 
 # This function only be used for close, delete all reserved resources.
 # Called when script/scenario/quantcenter closed, or in processing after end_tiling function finished.
@@ -129,6 +131,9 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
     global socket
     retries_left = REQUEST_RETRIES
     reply = None
+    if type(request) is str:
+        print(f"Request: {request}")
+    
     while retries_left != 0:
         if isinstance(request, str):
             socket.send_string(request)
@@ -138,16 +143,18 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
         if socket.poll(timeout, zmq.POLLIN):
             if returntype == RETURN_TYPE_STRING:
                 reply = socket.recv_string()
+                print(f"Reply: {reply}")
             elif returntype == RETURN_TYPE_PYOBJ:
                 reply = socket.recv_pyobj()
             elif returntype == RETURN_TYPE_UNKNOWN:
                 reply = socket.recv()
+                print(f"Reply: {reply}")
             return reply
 
         retries_left -= 1
-        socket.setsockopt(zmq.LINGER, 0)
+        socket.setsockopt(zmq.LINGER, 100)
         socket.close()
-        socket = context.socket(zmq.REQ)
+        socket = context.socket(zmq.PAIR)
         socket.connect(SERVER_ENDPOINT)
 
         if retries_left == 0:
