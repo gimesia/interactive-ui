@@ -1,7 +1,5 @@
 import asyncio
-import random
 import threading
-import time
 import tkinter as tk
 import cv2 as cv
 import numpy as np
@@ -26,6 +24,9 @@ EXIT = 'EXIT'
 UNKNOWN = 'UNKNOWN'
 
 ZMQ_SERVERNAME = "tcp://*:5560"
+
+DATA_DESTINATION_PATH = "data/raw-data.csv"
+DATA_DESTINATION_PATH_SUPERVISED = "data/supervised-data.csv"
 
 reference_umpp = 0.125
 
@@ -113,10 +114,10 @@ def start_new_thread(fc):
 
 
 class ObjectParams():
-    def __init__(self, cluster_name, cl_i, i, area, center, disabled):
+    def __init__(self, cluster_name: str, cl_i: int, cnt_i: int, area: float, center, disabled: bool):
         self.cluster = cluster_name
         self.cl_i = cl_i
-        self.cnt_i = i
+        self.cnt_i = cnt_i
         self.area = area
         self.center = center
         self.disabled = disabled
@@ -129,38 +130,45 @@ class Cluster():
     """ Class for a class of identified objects
     """
 
-    def __init__(self, clustername: str, color, thicc):
+    def __init__(self, clustername: str, color, thickness):
         self.name = clustername
-        self.color: tuple(int, int, int) = color
-        self.thicc: int = thicc
+        self.color = color
+        self.thickness = thickness
         self.checked = True
         self.contours = []
         self.disabled_contours = []
+
+    def sort_contours(self):
+        self.contours.sort(key=lambda x: cv.contourArea(x))
 
     def contour_count(self) -> int:
         return len(self.contours) + len(self.disabled_contours)
 
     def disable_contour(self, index: int) -> None:
         self.disabled_contours.append(self.contours.pop(index))
+        self.disabled_contours.sort(key=lambda x: cv.contourArea(x))
 
     def enable_contour(self, index: int) -> None:
         self.contours.append(self.disabled_contours.pop(index))
+        self.contours.sort(key=lambda x: cv.contourArea(x))
 
-    @property
-    def __geo_interface__(self):
+    def to_geojson(self, disableds=False):
         features = []
-        for i, contour in enumerate(self.contours):
+        for i, contour in enumerate(self.disabled_contours if disableds else self.contours):
             features.append({
                 "type": "Feature",
                 "geometry": {
                     "type": "Polygon",
-                    "coordinates": contour[:, 0, :]},
+                    "coordinates": contour
+                },
                 "properties": {
                     "index": i,
                     "area": cv.contourArea(contour),
-                    "center": 0  # centroid_for_contour(contour)
+                    "center": centroid_for_contour(contour),
+                    "disabled": disableds,
+                    "cluster": self.name
                 }})
-        return {"type": "FeatureCollection", "features": features, "properties": {"cluster": self.name, "index": i}}
+        return {"type": "FeatureCollection", "features": features, "properties": {"cluster": self.name}}
 
 
 class ImageWindow():
@@ -168,8 +176,8 @@ class ImageWindow():
         self.name = name
         # CREATE CLUSTERS
         self.clusters: list[Cluster] = [
-            Cluster("Positive", (250, 106, 17), 2),
-            Cluster("Negative", (107, 76, 254), 1),
+            Cluster("Positive", (107, 76, 254), 2),
+            Cluster("Negative", (250, 106, 17), 1),
         ]
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
@@ -179,22 +187,20 @@ class ImageWindow():
         self.stats = None
         self.stats_img = None
         self.selected: ObjectParams = None
+        self.data = None
 
-        cv.namedWindow(self.name, cv.WINDOW_NORMAL | cv.WINDOW_KEEPRATIO)
-
-        """NOTE: BOTI
-        """
-        self.set_base_image(cv.imread(
-            "C:\\Users\\aron.gimesi\\Documents\\.repos\\DXIA-AlgoDev\\interactive ui\\img\\proto_img.tiff"))
-        self.show_img()
+        cv.namedWindow(self.name, cv.WINDOW_KEEPRATIO)
+        self.set_base_image(cv.imread("img/proto_img.tiff"))
         self.update_contour_img()
-
         # Mouse event callbacks
         cv.setMouseCallback(self.name, self.on_mouse_event)
-        # self.create_ui_controls()
+
+        for cl in self.clusters:
+            cl.sort_contours()
+        self.data = self.extract_dataframe_data()
 
     def set_base_image(self, img: np.ndarray) -> None:
-        # TODO Resize!        
+        # TODO Resize!
         self.og_img = img.copy()
         self.contour_img = img.copy()
 
@@ -216,6 +222,7 @@ class ImageWindow():
         """
         global model
         img = self.og_img.copy()
+        cv.imshow(self.name, img)
 
         concentration_maps = colour_deconv.get_concentration(
             img,
@@ -234,7 +241,7 @@ class ImageWindow():
                 ).astype(int)
             )
             cluster.disabled_contours = []
-
+        self.data = self.extract_dataframe_data()
         return self.clusters
 
     def toggle_select_mode(self):
@@ -248,11 +255,40 @@ class ImageWindow():
         self.selected = None
         self.refresh_on_next = True
 
+    def extract_geojson_data(self):
+        enabled = [cl.to_geojson() for cl in self.clusters]
+        disabled = [cl.to_geojson(True) for cl in self.clusters]
+        return [*enabled, *disabled]
+
+    def extract_dataframe_data(self) -> pd.DataFrame:
+        features = []
+        for feats in self.extract_geojson_data():
+            for f in feats["features"]:
+                features.append(f)
+        cluster = pd.Series([n["properties"]["cluster"] for n in features])
+        disabled = pd.Series([n["properties"]["disabled"] for n in features])
+        contour_i = pd.Series([n["properties"]["index"] for n in features])
+        area = pd.Series([n["properties"]["area"] for n in features])
+        center = pd.Series([n["properties"]["center"] for n in features])
+
+        df = pd.DataFrame({
+            "cluster": cluster,
+            "disabled": disabled,
+            "contour_i": contour_i,
+            "area": area,
+            "center": center
+        })
+        return df
+
     def save_data(self, *args):
-        # TODO!
-        print("save_data:")
-        print(args)
-        pass
+        data = self.extract_dataframe_data()
+
+        diff = self.data.compare(data)
+        if diff.empty:
+            data.to_csv(DATA_DESTINATION_PATH)
+        else:
+            data.to_csv(DATA_DESTINATION_PATH)
+            data.to_csv(DATA_DESTINATION_PATH_SUPERVISED)
 
     def update_contour_img(self, segment=True) -> None:
         im = self.og_img.copy()
@@ -262,19 +298,19 @@ class ImageWindow():
         for cl in self.clusters:
             if not cl.checked:
                 continue
-            cv.drawContours(im, cl.contours, -1, cl.color, cl.thicc)
+            cv.drawContours(im, cl.contours, -1, cl.color, cl.thickness)
             cv.drawContours(im, cl.disabled_contours, -
-                            1, (100, 100, 100), cl.thicc)
-        
+                            1, (100, 100, 100), cl.thickness)
+
         if not self.edit:
             if self.selected is not None:
-                cl_i, cnt_i = self.selected.cl_i, self.selected.cnt_i 
+                cl_i, cnt_i = self.selected.cl_i, self.selected.cnt_i
                 if self.selected.disabled:
                     cnt = [self.clusters[cl_i].disabled_contours[cnt_i]]
                 else:
                     cnt = [self.clusters[cl_i].contours[cnt_i]]
                 cv.drawContours(im, cnt, -1, (100, 200, 100), 2, cv.LINE_4)
-            
+
         self.contour_img = im
 
         self.refresh_on_next = True
@@ -381,8 +417,8 @@ class ImageWindow():
 class BigTing():
     def __init__(self):
         self.context: Context = Context()
-        self.sock: Socket = self.context.socket(zmq.PAIR)
-        self.sock.bind(ZMQ_SERVERNAME)
+        self.socket: Socket = self.context.socket(zmq.PAIR)
+        self.socket.bind(ZMQ_SERVERNAME)
         self.op = True
         self.window = ImageWindow()
         self.tk = None
@@ -394,36 +430,38 @@ class BigTing():
             self.pong()
         elif msg == INP_IMAGE:
             self.receive_image()
+        elif msg == QUERY_CONTOUR:
+            self.send_contours()
         elif msg == EXIT:
             self.confirm_exit(True)
         else:
-            self.sock.send_string(f"{msg}")
+            self.socket.send_string(f"{msg}")
 
     def pong(self):  # Answer to ping
-        self.sock.send_string(ALIVE)
+        self.socket.send_string(ALIVE)
 
     def confirm_req(self):  # Sends confirmation of received request
         print("Sending confirmation of received request")
-        self.sock.send_string(REQ_RECEIVED)
+        self.socket.send_string(REQ_RECEIVED)
 
     def confirm_req_complete(self):  # Sends confirmation of received request
         print("Sending confirmation")
-        self.sock.send_string(DONE)
+        self.socket.send_string(DONE)
 
     def confirm_req_failed(self):  # Sends receit of failed request
         print("Sending fail receipt")
-        self.sock.send_string(FAILED)
+        self.socket.send_string(FAILED)
 
     def confirm_exit(self, close=True):  # Confirms EXIT command
         print("Sending EXIT confirmation")
         if close:
             self.op = False
-        self.sock.send_string("q")
+        self.socket.send_string("q")
 
     def receive_image(self):  # Reception of image from socket
         print("Receiving image")
         self.confirm_req()
-        message = self.sock.recv_pyobj()
+        message = self.socket.recv_pyobj()
         try:
             message = cv.cvtColor(message, cv.COLOR_BGR2RGB)
             self.window.set_base_image(message)
@@ -434,6 +472,10 @@ class BigTing():
         self.window.update_contour_img()
         self.window.refresh_on_next = True
 
+    def send_contours(self):
+        contours = [cl.contours for cl in self.window.clusters]
+        self.socket.send_pyobj(contours)
+
     async def coroutine_zmq(self):
         """ZeroMQ communication async coroutine"""
         print('ZMQ Coroutine is running')
@@ -442,13 +484,13 @@ class BigTing():
             i += 1
             message = None
             print(f'zmq iter: {i}')
-            if self.sock.poll(100, zmq.POLLIN):
-                message = self.sock.recv_string()
+            if self.socket.poll(100, zmq.POLLIN):
+                message = self.socket.recv_string()
                 self.handle_message(message)
                 print(f'message: \"{message}\"')
             await asyncio.sleep(0)
 
-        self.sock.close()
+        self.socket.close()
         self.tk.quit()
         await asyncio.sleep(0)
         print('ZMQ Coroutine is done')
@@ -504,7 +546,7 @@ class BigTing():
         self.tk = root
 
         image_frame = tk.Frame(root)
-        image_frame.pack(side='left', fill='both')
+        image_frame.pack(side='left', fill='both', padx=12, pady=12)
 
         if self.window.stats_img is not None:
             im = Image.fromarray(self.windwo.stats_img)
@@ -518,7 +560,7 @@ class BigTing():
         image_label.pack()
 
         controls_frame = tk.Frame(root)
-        controls_frame.pack(fill='both', expand=True)
+        controls_frame.pack(fill='both', expand=True, padx=(0, 25), pady=25)
 
         rad_btn_frame = tk.Frame(controls_frame)
         rad_btn_val = tk.BooleanVar()
@@ -543,8 +585,11 @@ class BigTing():
             self.window.refresh_on_next = True
 
         for i, cluster in enumerate(clusters):
-            check_buttons.update({cluster.name: tk.Checkbutton(controls_frame, text=cluster.name,
-                                                               variable=cb_vals[i], onvalue=1, offvalue=0, width=1, command=checkbox_update)})
+            check_buttons.update({
+                cluster.name: tk.Checkbutton(
+                    controls_frame, text=cluster.name, variable=cb_vals[i],
+                    onvalue=1, offvalue=0, width=10, command=checkbox_update)
+            })
 
         for io in check_buttons.values():
             io.pack()
@@ -552,24 +597,20 @@ class BigTing():
         btn_frame = tk.Frame(controls_frame)
         btn_frame.pack(fill='y', expand=True)
 
-        stat_btn_frame = tk.Frame(btn_frame)
-        stat_btn_frame.pack(fill='y', expand=False)
-
-        button1 = tk.Button(stat_btn_frame, text="Show Stats",
-                            command=placeholder_func)
-        button2 = tk.Button(stat_btn_frame, text="Save Stats",
-                            command=placeholder_func)
+        button1 = tk.Button(btn_frame, text="Show Stats",
+                            command=self.window.extract_dataframe_data)
+        button2 = tk.Button(btn_frame, text="Save Stats",
+                            command=self.window.save_data)
         button3 = tk.Button(btn_frame, text="Dis-/Enable Contours",
                             command=self.window.toggle_contours)
-        button1.pack(side=tk.LEFT)
-        button2.pack(side=tk.LEFT)
+        button1.pack()
+        button2.pack()
         button3.pack()
 
         def on_closing():
             self.op = False
 
         root.protocol("WM_DELETE_WINDOW", on_closing)
-
         root.mainloop()
 
     def change_stats_image(self):
@@ -624,13 +665,15 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
         for j, contour in enumerate(cluster.contours):
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
-                hits.append(ObjectParams(cluster.name, cl_i,  j, cv.contourArea(contour), centroid_for_contour(contour), False))
+                hits.append(ObjectParams(cluster.name, cl_i,  j, cv.contourArea(
+                    contour), centroid_for_contour(contour), False))
 
     for cl_i, cluster in enumerate(clusters):
         for j, contour in enumerate(cluster.disabled_contours):
             # If point is on or inside the contour
             if int(cv.pointPolygonTest(contour, point, False)) >= 0:
-                hits.append(ObjectParams(cluster.name, cl_i, j, cv.contourArea(contour), centroid_for_contour(contour), True))
+                hits.append(ObjectParams(cluster.name, cl_i, j, cv.contourArea(
+                    contour), centroid_for_contour(contour), True))
     if len(hits) == 1:
         result: ObjectParams = hits[0]
     elif len(hits) == 0:
@@ -641,10 +684,10 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
     if disable:
         if result.disabled:
             clusters[result.cl_i].enable_contour(result.cnt_i)
-            result.cnt_i = len(clusters[result.cl_i].contours) - 1 
+            result.cnt_i = len(clusters[result.cl_i].contours) - 1
         else:
             clusters[result.cl_i].disable_contour(result.cnt_i)
-            result.cnt_i = len(clusters[result.cl_i].disabled_contours) - 1 
+            result.cnt_i = len(clusters[result.cl_i].disabled_contours) - 1
     return result
 
 

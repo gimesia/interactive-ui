@@ -7,6 +7,7 @@
 import subprocess
 import datetime
 import zmq
+import numpy as np
 import quantification as qc
 from ast import Return
 info = {'title': 'Interactive UI', 'requirements': ['pyzmq']}
@@ -47,8 +48,7 @@ def start_process(thresholdinfo):
 
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     global context, socket, isPreview, pythonPath, externalprocesspath
-    out.clusters.add('cl1', '#0000FF').add('cl2', '#FFFF00').add(
-        'cl3', '#FF8800').add('cl4', '#FF0000')
+    out.clusters.add('cl1', '#FF0000').add('cl2', '#0000FF')#.add('cl3', '#FFFF00').add('cl4', '#FF8800')
     out.processing.tile_size = 1024
     out.processing.tile_border_size = 128
     out.processing.zoom = 2.5
@@ -81,23 +81,18 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
         # Send the image to external process, which is making some calculations, and sends back the contours.
         communicate("INP_IMAGE")
         communicate(inp.image)
-        for i in range(0, 4):
-            contours = communicate(
-                "QUERY_CONTOUR", returntype=RETURN_TYPE_PYOBJ, timeout=7200000)
-            for c in contours:
+        contours = communicate("QUERY_CONTOUR", returntype=RETURN_TYPE_PYOBJ, timeout=720000)
+        for i, cl in enumerate(contours):
+            for polygon in cl:
                 points = []
-                for p in c:
-                    points.append((p[0][0], p[0][1]))
+                for j, p in enumerate(polygon):
+                    if j == len(polygon) - 1:
+                        break
+                    points.append((p[0], p[1]))
                 out.results.add_polygon(
                     i, points, custom_data=datetime.datetime.now().strftime('%c'))
 
-        # In preview mode the user can set the threshold info in a tkinter UI. This treshold info is transferred to ScriptQuant
-        # and then saved into the scenario XML. In processing, this saved data can be retrieved from XML.
-        if isPreview:
-            message = communicate("QUERY_CONTOUR")
-            out.saved_data = message
-        else:
-            communicate("DONE")
+        communicate("DONE")
 
     except ExternalProcessNotRespondingException as e:
         print("External process is not responding.")
@@ -131,6 +126,9 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
     global socket
     retries_left = REQUEST_RETRIES
     reply = None
+    if type(request) is str:
+        print(f"Request: {request}")
+    
     while retries_left != 0:
         if isinstance(request, str):
             socket.send_string(request)
@@ -140,11 +138,12 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
         if socket.poll(timeout, zmq.POLLIN):
             if returntype == RETURN_TYPE_STRING:
                 reply = socket.recv_string()
+                print(f"Reply: {reply}")
             elif returntype == RETURN_TYPE_PYOBJ:
                 reply = socket.recv_pyobj()
             elif returntype == RETURN_TYPE_UNKNOWN:
                 reply = socket.recv()
-            print(f"Reply: {reply}")
+                print(f"Reply: {reply}")
             return reply
 
         retries_left -= 1
