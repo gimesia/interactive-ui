@@ -3,15 +3,25 @@
 # the calculated contours and threshold parameters can be transferred back to ScriptQuant.
 # External process get started automatically by this script.
 # External process code can be found in ScriptQuant.Examples/interactive_ui.py.
+info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
 
+from datetime import date
+import os
 import subprocess
 import datetime
 import zmq
 import numpy as np
 import quantification as qc
 from ast import Return
-info = {'title': 'Interactive UI', 'requirements': ['pyzmq']}
+from pathlib import Path
 
+
+REQUEST_RETRIES = 1
+REQUEST_TIMEOUT = 1000
+SERVER_ENDPOINT = "tcp://localhost:5560"
+RETURN_TYPE_PYOBJ = 1
+RETURN_TYPE_STRING = 2
+RETURN_TYPE_UNKNOWN = 3
 
 context = None
 socket = None
@@ -20,17 +30,33 @@ external_process = None
 logfile = None
 isPreview = False
 pythonPath = ""
-logfilepath = "e:\\Python scripts\\log.txt"
-REQUEST_RETRIES = 1
-REQUEST_TIMEOUT = 1000
-SERVER_ENDPOINT = "tcp://localhost:5560"
-RETURN_TYPE_PYOBJ = 1
-RETURN_TYPE_STRING = 2
-RETURN_TYPE_UNKNOWN = 3
+
+def create_out_dir():
+    """Create output folder in the user's 'Downloads' folder
+
+    Returns:
+        str: output directory 
+    """
+    output_dir = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
+    today = date.today().strftime("%b-%d-%Y")
+    today_dir = os.path.join(output_dir, today)
+    try:
+        os.listdir(output_dir)
+    except:
+        os.mkdir(output_dir)
+    try:
+        os.listdir(today_dir)
+    except:
+        os.mkdir(today_dir)
+    return today_dir
+
+output_dir = create_out_dir()
+logfilepath = f"{output_dir}\\log.txt"
+with open(f"{output_dir}\\log.txt", "w") as f:
+    f.write("Created log file!\n")
+
 
 # Start the external process with argument.
-
-
 def start_process(thresholdinfo):
     global logfile, external_process
     # A logfile created, and passed to the subprocess, so it can log any error into this file.
@@ -48,7 +74,8 @@ def start_process(thresholdinfo):
 
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     global context, socket, isPreview, pythonPath, externalprocesspath
-    out.clusters.add('cl1', '#FF0000').add('cl2', '#0000FF')#.add('cl3', '#FFFF00').add('cl4', '#FF8800')
+    # .add("cl3", "#FFFF00").add("cl4", "#FF8800")
+    out.clusters.add("Positive", "#FF0000").add("Negative", "#0000FF")
     out.processing.tile_size = 1024
     out.processing.tile_border_size = 128
     out.processing.zoom = 2.5
@@ -63,8 +90,8 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     socket.connect(SERVER_ENDPOINT)
 
     # Check if any data saved into the scenario.
-    threshold_info = ''
-    if inp.saved_data != '':
+    threshold_info = ""
+    if inp.saved_data != "":
         threshold_info = inp.saved_data
 
     # Check if external process is alive, if not, then start it.
@@ -81,7 +108,8 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
         # Send the image to external process, which is making some calculations, and sends back the contours.
         communicate("INP_IMAGE")
         communicate(inp.image)
-        contours = communicate("QUERY_CONTOUR", returntype=RETURN_TYPE_PYOBJ, timeout=720000)
+        contours = communicate(
+            "QUERY_CONTOUR", returntype=RETURN_TYPE_PYOBJ, timeout=720000)
         for i, cl in enumerate(contours):
             for polygon in cl:
                 points = []
@@ -90,7 +118,7 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
                         break
                     points.append((p[0], p[1]))
                 out.results.add_polygon(
-                    i, points, custom_data=datetime.datetime.now().strftime('%c'))
+                    i, points, custom_data=datetime.datetime.now().strftime("%c"))
 
         communicate("DONE")
 
@@ -128,7 +156,7 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
     reply = None
     if type(request) is str:
         print(f"Request: {request}")
-    
+
     while retries_left != 0:
         if isinstance(request, str):
             socket.send_string(request)

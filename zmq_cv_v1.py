@@ -1,4 +1,8 @@
 import asyncio
+import csv
+from datetime import datetime
+import os
+from pathlib import Path
 import threading
 import tkinter as tk
 import cv2 as cv
@@ -12,24 +16,43 @@ from stardist.nms import non_maximum_suppression
 from stardist.geometry import dist_to_coord
 from colour_deconvolution import ColourDeconvolution
 
-PING = 'PING'
-THRESHOLD_INFO = 'THRESHOLD_INFO'
-INP_IMAGE = 'INP_IMAGE'
-QUERY_CONTOUR = 'QUERY_CONTOUR'
-REQ_RECEIVED = 'REQUEST_RECEIVED'
-DONE = 'DONE'
-FAILED = 'FAILED'
-ALIVE = 'ALIVE'
-EXIT = 'EXIT'
-UNKNOWN = 'UNKNOWN'
 
+# Creating constants
+VERBOSE = False
+PING = "PING"
+THRESHOLD_INFO = "THRESHOLD_INFO"
+INP_IMAGE = "INP_IMAGE"
+QUERY_CONTOUR = "QUERY_CONTOUR"
+REQ_RECEIVED = "REQUEST_RECEIVED"
+DONE = "DONE"
+FAILED = "FAILED"
+ALIVE = "ALIVE"
+EXIT = "EXIT"
+UNKNOWN = "UNKNOWN"
 ZMQ_SERVERNAME = "tcp://*:5560"
+OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
+TODAY = datetime.now().strftime("%Y-%m-%d")
+TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 
-DATA_DESTINATION_PATH = "data/raw-data.csv"
-DATA_DESTINATION_PATH_SUPERVISED = "data/supervised-data.csv"
+now = lambda: datetime.now().strftime("%H-%M-%S")
+data_destination_path_raw = lambda: f"{TODAY_DIR}/{now()}_raw-data"
+data_destination_path_supervised = lambda: f"{TODAY_DIR}/{now()}_supervised-data"
+stats_destination_path = lambda: f"{TODAY_DIR}/{now()}_stats"
 
+# Creating output files
+# TODO: further isolation of saved data of different quants
+try:
+    os.listdir(OUTPUT_DIR)
+except:
+    os.mkdir(OUTPUT_DIR)
+try:
+    os.listdir(TODAY_DIR)
+except:
+    os.mkdir(TODAY_DIR)
+
+
+# Contour prediction parameters
 reference_umpp = 0.125
-
 colour_deconv = ColourDeconvolution(
     [
         [0.650, 0.704, 0.286],
@@ -37,8 +60,7 @@ colour_deconv = ColourDeconvolution(
         # [0, 0, 0]
     ]
 )
-
-model = StarDist2D.from_pretrained('2D_versatile_fluo')
+model = StarDist2D.from_pretrained("2D_versatile_fluo")
 
 
 def predict_contours(
@@ -145,10 +167,12 @@ class Cluster():
         return len(self.contours) + len(self.disabled_contours)
 
     def disable_contour(self, index: int) -> None:
+        print("Disable object")
         self.disabled_contours.append(self.contours.pop(index))
         self.disabled_contours.sort(key=lambda x: cv.contourArea(x))
 
     def enable_contour(self, index: int) -> None:
+        print("Enable object")
         self.contours.append(self.disabled_contours.pop(index))
         self.contours.sort(key=lambda x: cv.contourArea(x))
 
@@ -189,7 +213,7 @@ class ImageWindow():
         self.selected: ObjectParams = None
         self.data = None
 
-        cv.namedWindow(self.name, cv.WINDOW_KEEPRATIO)
+        cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
         self.set_base_image(cv.imread("img/proto_img.tiff"))
         self.update_contour_img()
         # Mouse event callbacks
@@ -214,12 +238,7 @@ class ImageWindow():
         self.show_contours = not self.show_contours
         self.refresh_on_next = True
 
-    def ath(self):
-        """TODO: BOTI CHANGE THIS!!!
-
-        Returns:
-            clusters: Classified clusters with the stored contours
-        """
+    def segmentation(self):
         global model
         img = self.og_img.copy()
         cv.imshow(self.name, img)
@@ -282,18 +301,27 @@ class ImageWindow():
 
     def save_data(self, *args):
         data = self.extract_dataframe_data()
-
+        now = datetime.now().strftime("_%H-%M-%S")
         diff = self.data.compare(data)
         if diff.empty:
-            data.to_csv(DATA_DESTINATION_PATH)
+            data.to_csv(data_destination_path_raw() + ".csv")
         else:
-            data.to_csv(DATA_DESTINATION_PATH)
-            data.to_csv(DATA_DESTINATION_PATH_SUPERVISED)
+            data.to_csv(data_destination_path_raw() + ".csv")
+            data.to_csv(data_destination_path_supervised() + ".csv")
+        self.save_stats()
+            
+    def save_stats(self, *args):
+        stats, l = self.extract_stats()
+        now = datetime.now().strftime("_%H-%M-%S")
+        df = pd.DataFrame({"raw": self.stats["Count"], "supervised": stats["Count"]})
+
+        df.to_csv(stats_destination_path() + ".csv")        
 
     def update_contour_img(self, segment=True) -> None:
         im = self.og_img.copy()
         if segment:
-            self.ath()
+            self.segmentation()
+            self.stats, l = self.extract_stats()
 
         for cl in self.clusters:
             if not cl.checked:
@@ -316,42 +344,35 @@ class ImageWindow():
         self.refresh_on_next = True
         return im
 
-    def extract_stats(self, *args):  # -> pd.DataFrame:
+    def extract_stats(self, *args):
         """Extracts the summary of the clusters' distributions
         """
-        lengths = np.asarray(
-            list(map(lambda cl: len(cl.contours), self.clusters))
-        )
-
-        enabled = np.sum(lengths)
-
+        enabled = np.sum(
+            list(map(lambda cl: len(cl.contours), self.clusters)))
         disabled = np.sum(
-            list(map(lambda cl: len(cl.disabled_contours), self.clusters))
-        )
-
+            list(map(lambda cl: len(cl.disabled_contours), self.clusters)))
         all = np.sum(
-            list(map(lambda cl: cl.contour_count(), self.clusters))
-        )
+            list(map(lambda cl: cl.contour_count(), self.clusters)))
 
         indexes1 = list(map(lambda cl: cl.name, self.clusters))
 
+        lengths = list(map(lambda cl: len(cl.contours), self.clusters))
+
         if not all:
-            frame = {'Count': np.zeros(
-                len(lengths),), 'Percentage': np.zeros(len(lengths),)}
+            frame = {"Count": np.zeros(len(lengths)),
+                     "Percentage": np.zeros(len(lengths),)}
         else:
-            frame = {'Count': pd.Series(lengths, index=indexes1),
-                     'Percentage': pd.Series((lengths / enabled) * 100, index=indexes1)}
+            frame = {"Count": pd.Series(lengths, index=indexes1),
+                     "Percentage": pd.Series((lengths / enabled) * 100, index=indexes1)}
 
         count = [enabled, disabled, all]
         percentage = [100 * enabled / all, 100 * disabled / all, int(100)]
-        indexes2 = ['enabled', 'disabled', 'all', ]
+        indexes2 = ["enabled", "disabled", "all", ]
 
         df1 = pd.DataFrame(frame, index=indexes1)
-        df2 = pd.DataFrame({'Count': count,
-                            'Percentage': percentage}, index=indexes2)
+        df2 = pd.DataFrame({"Count": count,
+                            "Percentage": percentage}, index=indexes2)
         res = pd.concat(objs=[df1, df2])
-
-        self.stats = res
 
         lines = []
         for index, row in res.iterrows():
@@ -459,6 +480,9 @@ class BigTing():
         self.socket.send_string("q")
 
     def receive_image(self):  # Reception of image from socket
+        global now
+        now = datetime.now().strftime("%H-%M-%S")
+        
         print("Receiving image")
         self.confirm_req()
         message = self.socket.recv_pyobj()
@@ -468,7 +492,7 @@ class BigTing():
             self.confirm_req_complete()
         except:
             self.confirm_req_failed()
-        self.window.ath()
+        self.window.segmentation()
         self.window.update_contour_img()
         self.window.refresh_on_next = True
 
@@ -478,31 +502,33 @@ class BigTing():
 
     async def coroutine_zmq(self):
         """ZeroMQ communication async coroutine"""
-        print('ZMQ Coroutine is running')
+        print("ZMQ Coroutine is running")
         i = 0
         while self.op:
+            if VERBOSE:
+                print(f"zmq iter: {i}")
             i += 1
             message = None
-            print(f'zmq iter: {i}')
             if self.socket.poll(100, zmq.POLLIN):
                 message = self.socket.recv_string()
                 self.handle_message(message)
-                print(f'message: \"{message}\"')
+                # print(f"message: \"{message}\"")
             await asyncio.sleep(0)
 
         self.socket.close()
         self.tk.quit()
         await asyncio.sleep(0)
-        print('ZMQ Coroutine is done')
+        print("ZMQ Coroutine is done")
 
     async def coroutine_image(self):
         """OpenCV image display coroutine"""
-        print('Image Coroutine')
+        print("Image Coroutine is running")
         start_new_thread(self.coroutine_controls)
         j = 0
         while self.op:
+            if VERBOSE:
+                print(f"image iter: {j}")
             j += 1
-            print(f'image iter: {j}')
 
             # Showing Image
             if self.window.og_img is not None:
@@ -537,7 +563,7 @@ class BigTing():
 
         # Awaiting end
         await asyncio.sleep(0)
-        print('Image Coroutine is done')
+        print("Image Coroutine is done")
 
     def coroutine_controls(self):
         """Tkinter controls & stats window coroutine"""
@@ -546,7 +572,7 @@ class BigTing():
         self.tk = root
 
         image_frame = tk.Frame(root)
-        image_frame.pack(side='left', fill='both', padx=12, pady=12)
+        image_frame.pack(side="left", fill="both", padx=12, pady=12)
 
         if self.window.stats_img is not None:
             im = Image.fromarray(self.windwo.stats_img)
@@ -560,7 +586,7 @@ class BigTing():
         image_label.pack()
 
         controls_frame = tk.Frame(root)
-        controls_frame.pack(fill='both', expand=True, padx=(0, 25), pady=25)
+        controls_frame.pack(fill="both", expand=True, padx=(0, 25), pady=25)
 
         rad_btn_frame = tk.Frame(controls_frame)
         rad_btn_val = tk.BooleanVar()
@@ -595,11 +621,11 @@ class BigTing():
             io.pack()
 
         btn_frame = tk.Frame(controls_frame)
-        btn_frame.pack(fill='y', expand=True)
+        btn_frame.pack(fill="y", expand=True)
 
-        button1 = tk.Button(btn_frame, text="Show Stats",
-                            command=self.window.extract_dataframe_data)
-        button2 = tk.Button(btn_frame, text="Save Stats",
+        button1 = tk.Button(btn_frame, text="Save STATS",
+                            command=self.window.save_stats)
+        button2 = tk.Button(btn_frame, text="Save DATA",
                             command=self.window.save_data)
         button3 = tk.Button(btn_frame, text="Dis-/Enable Contours",
                             command=self.window.toggle_contours)
@@ -693,8 +719,8 @@ def find_object_for_point(point: "tuple[int,int]", clusters: "list[Cluster]", di
 
 def centroid_for_contour(contour):
     M = cv.moments(contour)
-    cx = int(M['m10'] / M['m00'])
-    cy = int(M['m01'] / M['m00'])
+    cx = int(M["m10"] / M["m00"])
+    cy = int(M["m01"] / M["m00"])
     return (cx, cy)
 
 
