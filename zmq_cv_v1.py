@@ -34,10 +34,13 @@ OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
 TODAY = datetime.now().strftime("%Y-%m-%d")
 TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 
-now = lambda: datetime.now().strftime("%H-%M-%S")
-data_destination_path_raw = lambda: f"{TODAY_DIR}/{now()}_raw-data"
-data_destination_path_supervised = lambda: f"{TODAY_DIR}/{now()}_supervised-data"
-stats_destination_path = lambda: f"{TODAY_DIR}/{now()}_stats"
+
+def now(): return datetime.now().strftime("%H-%M-%S")
+def data_destination_path_raw(): return f"{TODAY_DIR}/{now()}_raw-data"
+def data_destination_path_supervised(
+): return f"{TODAY_DIR}/{now()}_supervised-data"
+def stats_destination_path(): return f"{TODAY_DIR}/{now()}_stats"
+
 
 # Creating output files
 # TODO: further isolation of saved data of different quants
@@ -309,13 +312,14 @@ class ImageWindow():
             data.to_csv(data_destination_path_raw() + ".csv")
             data.to_csv(data_destination_path_supervised() + ".csv")
         self.save_stats()
-            
+
     def save_stats(self, *args):
         stats, l = self.extract_stats()
         now = datetime.now().strftime("_%H-%M-%S")
-        df = pd.DataFrame({"raw": self.stats["Count"], "supervised": stats["Count"]})
+        df = pd.DataFrame(
+            {"raw": self.stats["Count"], "supervised": stats["Count"]})
 
-        df.to_csv(stats_destination_path() + ".csv")        
+        df.to_csv(stats_destination_path() + ".csv")
 
     def update_contour_img(self, segment=True) -> None:
         im = self.og_img.copy()
@@ -482,7 +486,7 @@ class BigTing():
     def receive_image(self):  # Reception of image from socket
         global now
         now = datetime.now().strftime("%H-%M-%S")
-        
+
         print("Receiving image")
         self.confirm_req()
         message = self.socket.recv_pyobj()
