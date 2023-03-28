@@ -1,3 +1,4 @@
+
 import asyncio
 import csv
 from datetime import datetime
@@ -19,7 +20,7 @@ from colour_deconvolution import ColourDeconvolution
 
 # Creating constants
 VERBOSE = True
-COLUMNS = ["Cluster", "Disabled", "Contours", "Center", "Area"]
+COLUMNS = ["Cluster", "Disabled", "Contour", "Center", "Area"]
 
 # ZMQ Constants
 PING = "PING"
@@ -51,8 +52,8 @@ MODEL = StarDist2D.from_pretrained("2D_versatile_fluo")
 # Global pd.DataFrame variable
 mainframe = pd.DataFrame({
     "Cluster": [],
-    "Disabled": [],
-    "Contours": [],
+    "Disabled": pd.Series([], dtype=bool),
+    "Contour": [],
     "Center": [],
     "Area": []
 })
@@ -86,14 +87,12 @@ class Cluster():
         self.name = clustername
         self.color = color
         self.thickness = thickness
-        self.checked = True
-        self.disabled_contours = []
 
     def get_data(self, df: pd.DataFrame, *args) -> pd.DataFrame:
         return df[(df["Cluster"] == self.name)]
 
     def contours(self, *args) -> pd.Series:
-        return self.get_data()["Contours"]
+        return self.get_data()["Contour"]
 
     def sort_contours(self):
         return
@@ -119,6 +118,7 @@ class ImageWindow():
             Cluster("Negative", (250, 106, 17), 1),
         ]
         self.name = name
+        self.raw_df = mainframe.copy()
         self.edit_df = mainframe.copy()
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
@@ -155,16 +155,26 @@ class ImageWindow():
         self.refresh_on_next = True
 
     def segmentation(self):
-        global MODEL, mainframe
+        global MODEL
         img = self.og_img.copy()
 
+        # Emptying dataframe
+        self.raw_df = pd.DataFrame({
+            "Cluster": [],
+            "Disabled": pd.Series([], dtype=bool),
+            "Contour": [],
+            "Center": [],
+            "Area": []
+        })
+
+        # Displaying image without contours temporarily
         cv.imshow(self.name, img)
 
+        # Color deconvolution
         concentration_maps = COLOUR_DECONVOLUTION.get_concentration(
             img,
             normalisation="scale"
         )
-
         for stain_index, cluster in enumerate(self.clusters):
             conts = list(
                 np.rint(
@@ -176,31 +186,30 @@ class ImageWindow():
                     )
                 ).astype(int)
             )
-            print(len(conts))
+            # Create series from segmented objects
             conts_series = pd.Series(conts)
             clusternames_series = pd.Series(
-                np.full((len(conts)), cluster.name))
-            false_series = pd.Series(np.full((len(conts)), False))
+                np.full_like(conts_series, cluster.name))
             area_series = pd.Series(
-                list(map(lambda x: cv.contourArea(x), conts)))
+                list(map(lambda cnt: cv.contourArea(cnt), conts)))
             centroid_series = pd.Series(
-                list(map(lambda x: centroid_for_contour(x), conts)))
+                list(map(lambda cnt: centroid_for_contour(cnt), conts)))
+
+            # Create df from series
             df = pd.DataFrame({
                 "Cluster": clusternames_series,
-                "Disabled": false_series.copy(),
-                "Selected": false_series.copy(),
-                "Contours": conts_series,
+                "Disabled": pd.Series(np.zeros_like(conts_series, dtype=bool)),
+                "Selected": pd.Series(np.zeros_like(conts_series, dtype=bool)),
+                "Contour": conts_series,
                 "Center": centroid_series,
                 "Area": area_series
             })
 
-            cluster.contours = conts
-            cluster.disabled_contours = []
-            mainframe = pd.concat([mainframe, df])
+            # Adding rows into object property
+            self.raw_df = pd.concat([self.raw_df, df])
 
-        print(mainframe)
-
-        self.edit_df = mainframe.copy()
+        # Storing the editable dataframe
+        self.edit_df = self.raw_df.copy()
         return
 
     def toggle_select_mode(self):
@@ -211,25 +220,29 @@ class ImageWindow():
     def toggle_edit_mode(self):
         print("EDIT MODE")
         self.edit = True
-        self.selected = None
         self.refresh_on_next = True
 
     def extract_geojson_data(self):
+        """TODO"""
         return
 
     def extract_dataframe_data(self) -> pd.DataFrame:
+        """TODO"""
         return
 
     def save_data(self, *args):
+        """TODO"""
         global mainframe
         data = self.edit_df
         print(mainframe)
         return
 
     def extract_stats(self, *args):
+        """TODO"""
         return
 
     def save_stats(self, *args):
+        """TODO"""
         return
 
     def update_contour_img(self, segment=True) -> None:
@@ -243,8 +256,18 @@ class ImageWindow():
 
         # Draw contours for every cluster
         for cl in self.clusters:
-            cnts = list(cl.get_data(self.edit_df)["Contours"])
-            cv.drawContours(self.contour_img, cnts, -1, cl.color, cl.thickness)
+            cluster_df = cl.get_data(self.edit_df)
+            cnts = (cluster_df["Contour"])
+            for i, cnt in enumerate(cnts):
+                disabled = cluster_df["Disabled"][i]
+                selected = cluster_df["Selected"][i]
+                color = cl.color
+                if selected:
+                    color = (0, 210, 10)
+                elif disabled:
+                    color = (10, 10, 10)
+                cv.drawContours(self.contour_img, [cnt],
+                                -1, color, cl.thickness)
 
         cv.imshow(self.name, self.contour_img)
         return
@@ -260,23 +283,48 @@ class ImageWindow():
         if self.og_img is None or self.contour_img is None or not event:
             return
         point = (x, y)
+        print(point)
+
+        # Edit Mode
         if self.edit:
             if event == 4:
-                obj = find_object_for_point(point, self.edit_df)
+                print("Dis-/Enable object")
+                obj = self.toggle_object(point)
             elif event == 2:
                 print("Rescore object")
-                obj = find_object_for_point(point, self.edit_df)
-                if obj is not None:
-                    self.change_cluster(obj, backwards=False)
+                obj = self.rescore_object(point)
+            else:
+                return
             self.refresh_on_next = True
+
+        # Select Mode
         else:
             if event == 4:
                 print("Select object")
-                obj = find_object_for_point(point, self.edit_df)
-                self.selected = obj
-                obj_stats_img = textbox(obj.__str__().split("; "))
-                self.stats_img = obj_stats_img
+                self.edit_df["Selected"] = False
+                self.select_object(point)
                 self.refresh_on_next = True
+
+    def select_object(self, point, multiple=False):
+        """Changes 'Selected' property """
+        condition = self.edit_df["Contours"].apply(
+            lambda x: cv.pointPolygonTest(x[0], point, False) >= 0
+        )
+        filtered = self.edit_df[condition]
+        self.edit_df.loc[filtered.index, "Selected"] = True
+        return
+
+    def disable_object(self, point):
+        """TODO"""
+        condition = self.edit_df["Contours"].apply(
+            lambda x: cv.pointPolygonTest(x[0], point, False) >= 0
+        )
+        filtered = self.edit_df[condition]
+        pass
+
+    def rescore_object(self, point):
+        """TODO"""
+        pass
 
 
 class BigTing():
@@ -511,27 +559,29 @@ def placeholder_func(*args):
     print(args)
 
 
-def find_object_for_point(point: "tuple(int, int)", df: pd.DataFrame):
-    series = df["Contours"]
+def find_object_for_point(point: "tuple(int, int)", df: pd.DataFrame, multi_select=False) -> pd.DataFrame:
+
+    series = df["Contour"]
     p_test = np.array([cv.pointPolygonTest(x, point, False) for x in series])
+    print(p_test)
+    print(np.argwhere(p_test > -1).shape)
     indexes = np.argwhere(p_test > -1)
-    print(indexes)
-    return
 
+    if not np.any(p_test):
+        return pd.DataFrame({})
 
-def put_text(img: np.ndarray,
-             text: str,
-             org: "tuple(int, int)",
-             font=cv.FONT_HERSHEY_SIMPLEX,
-             fontScale: int = 1,
-             colors: "tuple(tuple(int, int, int), tuple(int, int, int))"
-             = ((0, 0, 0), (255, 255, 255)),
-             thickness: int = 3) -> np.ndarray:
-    im = cv.putText(img, text, org, font, fontScale,
-                    colors[0], thickness, cv.LINE_AA)
-    im = cv.putText(im, text, org, font, fontScale,
-                    colors[1], 1, cv.LINE_AA)
-    return im
+    hits = df.loc[indexes.squeeze()]
+    a = hits["Area"].min()
+    min_area = hits.loc[hits["Area"] == a]
+
+    print(f"hits:\n{hits}")
+    print(a)
+    print(f"min_area:\n{min_area}")
+
+    if multi_select:
+        return hits
+
+    return min_area
 
 
 def centroid_for_contour(contour: np.ndarray) -> "tuple(int, int)":
@@ -547,6 +597,21 @@ def centroid_for_contour(contour: np.ndarray) -> "tuple(int, int)":
     cx = int(M["m10"] / M["m00"])
     cy = int(M["m01"] / M["m00"])
     return (cx, cy)
+
+
+def put_text(img: np.ndarray,
+             text: str,
+             org: "tuple(int, int)",
+             font=cv.FONT_HERSHEY_SIMPLEX,
+             fontScale: int = 1,
+             colors: "tuple(tuple(int, int, int), tuple(int, int, int))"
+             = ((0, 0, 0), (255, 255, 255)),
+             thickness: int = 3) -> np.ndarray:
+    im = cv.putText(img, text, org, font, fontScale,
+                    colors[0], thickness, cv.LINE_AA)
+    im = cv.putText(im, text, org, font, fontScale,
+                    colors[1], 1, cv.LINE_AA)
+    return im
 
 
 def textbox(lines: "list[str]"):
@@ -570,7 +635,6 @@ def textbox(lines: "list[str]"):
     for line in lines:
         put_text(im, line, point)
         point = (point[0], point[1] + LINE_H)
-
     return im
 
 
