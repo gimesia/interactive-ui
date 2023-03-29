@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 
 # Generate random sample data
-n_clusters = 4
+n_clusters = 7
 cluster_data = [
     f'Cl_{np.random.randint(0, 4)}' for i in range(n_clusters)]
 disabled_data = np.random.choice([True, False], size=n_clusters)
@@ -69,14 +69,14 @@ def draw_contours_on_image(df, img):
 # %%
 im = np.zeros((500, 500, 3), float)
 
-
 cv2.imshow("Image", draw_contours_on_image(df, im))
 cv2.waitKey(0)
 cv2.destroyAllWindows()
 
 
 # %%
-point = (220, 170)
+# Define test point and func for testing
+point = (250, 270)
 
 
 def test_contour(contour):
@@ -87,10 +87,11 @@ def test_contour(contour):
 
 
 # %%
-# Show result for each row
+# Show point-test result for each row
 for i in df.iterrows():
     cnt = (i[1].Contours[0])
     print(cv2.pointPolygonTest(cnt, point, False))
+
 
 # %%
 # Perform polygon test on contours col
@@ -98,22 +99,32 @@ condition = df["Contours"].apply(
     lambda x: cv2.pointPolygonTest(x[0], point, False) >= 0
 )
 a = df.loc[condition]
-df.loc[a.index, "Go"] = True
-df
-
-# %%
-#
-df
+a
 
 
 # %%
+# Display polygon test results
+df.loc[a.index, "PointTestHit"] = True
+a
+
+
+# %%
+# Perform max_area finding
 max = a["Area"].max()
 condition2 = a["Area"].apply(lambda x: x == max)
 b = a[condition2]
-b.index
+b
+
+
 # %%
-df[condition][condition2]
+inverse = pd.Series(map(lambda x: not x, df.Disabled))
+inverse
+(df.Disabled)
+
 # %%
-rows = df.loc[b.index]
-rows
+df
+# %%
+df
+# %%
+df["Cluster"].unique()
 # %%
