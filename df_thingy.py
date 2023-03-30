@@ -33,11 +33,6 @@ EXIT = "EXIT"
 UNKNOWN = "UNKNOWN"
 ZMQ_SERVERNAME = "tcp://*:5560"
 
-# Output Constants
-OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
-TODAY = datetime.now().strftime("%Y-%m-%d")
-TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
-
 # Contour prediction constants
 REFERENCE_UMPP = 0.125
 COLOUR_DECONVOLUTION = ColourDeconvolution([
@@ -50,6 +45,7 @@ MODEL = StarDist2D.from_pretrained("2D_versatile_fluo")
 MAINFRAME = pd.DataFrame({
     "Cluster": [],
     "Disabled": pd.Series([], dtype=bool),
+    "Selected": pd.Series([], dtype=bool),
     "Contour": [],
     "Center": [],
     "Area": []
@@ -92,6 +88,7 @@ def predict_contours(
     )
     return contours
 
+
 class Cluster():
     """Class for a class of identified objects"""
     global mainframe
@@ -100,41 +97,38 @@ class Cluster():
         self.name = clustername
         self.color = color
         self.thickness = thickness
+        self.enabled = True
 
 
 class ImageWindow():
     def __init__(self, name="Interactive UI"):
-        # CREATE CLUSTERS
+        # INITIALIZE VARIABLES
         self.clusters: list[Cluster] = [
             Cluster("Positive", (107, 76, 254), 1),
             Cluster("Negative", (250, 106, 17), 1),
         ]
         self.name = name
-        self.df = MAINFRAME.copy()
+        self.raw_df = MAINFRAME.copy()
         self.sample_df = MAINFRAME.copy()
+        self.stats: pd.DataFrame = None
+        self.stats_img: np.ndarray = None
         self.og_img: np.ndarray = None
         self.contour_img: np.ndarray = None
         self.show_contours = True
         self.refresh_on_next = False
         self.edit = True
-        self.stats = None
-        self.stats_img = None
-        
 
+        # INITIALIZE OPENCV WINDOW
+        # MOCK IMAGE
         self.set_base_image(cv.imread("img/proto_img.tiff"))
+
+        # OPEN WINDOW AND DISPLAY CONTOURS
+        cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
         self.seg()
         self.update_contours()
-        
-        cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
-        # self.update_contour_img()
 
-        # Mouse event callbacks
-        # cv.setMouseCallback(self.name, self.on_mouse_event)
+        cv.setMouseCallback(self.name, self.mouse_event)
 
-        # for cl in self.clusters:
-        #     cl.sort_contours()
-        # self.data = self.extract_dataframe_data()
-       
     def set_base_image(self, img: np.ndarray) -> None:
         """Set new image as reference in the object
 
@@ -144,13 +138,37 @@ class ImageWindow():
         # TODO Resize!
         self.og_img = img.copy()
         self.contour_img = img.copy()
-        
+
+    def set_edit_mode(self, val: bool, *args):
+        """Radiobutton event handler function, only executes if state is different from 'val' param
+
+        Args:
+            val (bool): True if EDIT MODE should be turned on
+        """
+        if self.edit == val:
+            return
+        else:
+            self.edit = val
+            
+            if VERBOSE:
+                print(f"EDIT MODE -> {self.edit}")
+            
+            self.sample_df["Selected"] = False
+            self.refresh_on_next = True
+
+    def disable_contours(self):
+        """Toggles every cluster's visibility off/on
+        """
+        self.show_contours = not self.show_contours
+        self.show_img()
+
     def show_img(self) -> None:
+        """Displays image on window
+        """
         if self.show_contours:
             cv.imshow(self.name, self.contour_img)
         else:
             cv.imshow(self.name, self.og_img)
-
 
     def seg(self):
         """TODO: Move this step outside this file, it should get only the contours"""
@@ -159,9 +177,10 @@ class ImageWindow():
 
         # Displaying image without contours temporarily
         cv.imshow(self.name, img)
-        
+
         # Color deconvolution
-        concentration_maps = COLOUR_DECONVOLUTION.get_concentration(img, normalisation="scale")        
+        concentration_maps = COLOUR_DECONVOLUTION.get_concentration(
+            img, normalisation="scale")
         for stain_index, cluster in enumerate(self.clusters):
             conts = list(
                 np.rint(
@@ -173,7 +192,7 @@ class ImageWindow():
                     )
                 ).astype(int)
             )
-            
+
             # Create series from segmented objects
             conts_series = pd.Series(conts)
             clusternames_series = pd.Series(
@@ -194,29 +213,184 @@ class ImageWindow():
             })
 
             # Adding rows into object property
-            self.df = pd.concat([self.df, df], ignore_index=True)
+            self.raw_df = pd.concat([self.raw_df, df], ignore_index=True)
 
-        self.sample_df = self.df.copy()
+        self.sample_df = self.raw_df.copy()
         return
-    
+
     def update_contours(self):
         """Updates the contours on the image based on the 'sample_df' object variable
         """
         im = self.og_img.copy()
-        
-        for i in self.sample_df.iterrows():
-            cls = self.clusters
-            row = i[1]
-            mapped = list(map(lambda x: x.name, cls))
-            print(row["Cluster"])
-            color = cls[mapped.index(row["Cluster"])].color
-            print(row["Contour"])
-            print(type(row["Contour"]))
-            cv.drawContours(im, [row["Contour"]], -1, color, 1, cv.LINE_AA)
-        
-        self.contour_img = im
-        self.show_img()        
 
+        for i in self.sample_df.iterrows():
+            clusters = self.clusters
+            row = i[1]
+            cluster_names = list(map(lambda x: x.name, clusters))
+            
+            if not clusters[cluster_names.index(row["Cluster"])].enabled:
+                continue
+            
+            if row["Selected"]:
+                color = (0, 180, 0)
+            elif row["Disabled"]:
+                color = (10, 10, 10)
+            else:
+                color = clusters[cluster_names.index(row["Cluster"])].color
+
+            cv.drawContours(im, [row["Contour"]], -1, color, 1, cv.LINE_AA)
+
+        self.contour_img = im
+        self.show_img()
+
+    def mouse_event(self, event: int, x: int, y: int, flags: int, *args):
+        """Callback function for 
+
+        Args:
+            event (int): opencv event identifier
+            x (int): x coordinate of click
+            y (int): y coordinate of click
+            flags (int): opencv event flag identifier
+        """
+        point = (x, y)
+
+        # EDIT MODE
+        if self.edit:
+            # DIS-/ENABLED
+            if event == cv.EVENT_LBUTTONUP:
+                hit = self.df_polygon_test(point, False)
+                if hit.empty:
+                    return
+
+                # Toggle 'Disabled' value
+                # Get
+                disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
+                self.sample_df.loc[hit.index,
+                                   "Disabled"] = not disabled_val  # Set
+
+                self.refresh_on_next = True
+            # RESCORE OBJECT
+            elif event == cv.EVENT_RBUTTONUP:
+                clusters = list(map(lambda cl: cl.name, self.clusters))
+
+                hit = self.df_polygon_test(point, False)
+                if hit.empty:
+                    return
+
+                # Get
+                cl_name = self.sample_df.loc[hit.index].iloc[0]["Cluster"]
+                cl_index = clusters.index(cl_name)
+                next_cl_index = (cl_index + 1) % len(clusters)
+                self.sample_df.loc[hit.index,
+                                   "Cluster"] = clusters[next_cl_index]  # Set
+
+                self.refresh_on_next = True
+            else:
+                return
+        # SELECT MODE
+        else:
+            # MULTIPLE SELECT WITH LEFTCLICK
+            if event == cv.EVENT_LBUTTONUP:
+                hit = self.df_polygon_test(point)
+
+                if hit.empty:
+                    return
+
+                self.sample_df["Selected"] = False
+                self.sample_df.loc[hit.index, "Selected"] = True
+
+                self.refresh_on_next = True
+            # SINGLE SELECT WITH RIGHTCLICK
+            elif event == cv.EVENT_RBUTTONUP:
+                hit = self.df_polygon_test(point, False)
+
+                if hit.empty:
+                    return
+
+                self.sample_df["Selected"] = False
+                self.sample_df.loc[hit.index, "Selected"] = True
+
+                self.refresh_on_next = True
+            else:
+                return
+
+    def df_polygon_test(self, point: "tuple(int, int)", multiple=True):
+        """Returns the rows that contain the point given as parameter
+
+        Args:
+            point (tuple): (x, y) coordinates of a point
+            multiple (bool, optional): return all rows that contain the point. Defaults to True.
+
+        Returns:
+            pd.DataFrame: dataframe of hit(s)
+        """
+        condition = self.sample_df["Contour"].apply(
+            lambda x: cv.pointPolygonTest(x, point, False) >= 0
+        )
+        hits = self.sample_df.loc[condition]
+
+        if multiple:
+            return hits
+
+        mn = hits["Area"].min()
+        condition2 = hits["Area"].apply(lambda x: x == mn)
+        mn_hit = hits[condition2]
+
+        return mn_hit
+
+    def extract_data(self):
+        """Extracts data into destination files found in the end of the module
+        """
+        if self.raw_df.equals(self.sample_df):
+            if VERBOSE:
+                print(f"Extracting unmodified data")
+            self.raw_df.to_csv(data_destination_path_raw() + ".csv")
+        else:
+            if VERBOSE:
+                print(f"Extracting modified data")
+            self.raw_df.to_csv(data_destination_path_raw() + ".csv")
+            self.sample_df.to_csv(data_destination_path_supervised() + ".csv")
+    
+    def stats_for_df(self, df):
+        clusters = df["Cluster"].unique()
+        counts = []
+        
+        for i in clusters:
+            counts.append(
+                len(df[(df["Cluster"] == i) & (df["Disabled"] == False)])
+            )
+        
+        disabled = len(df[(df["Disabled"] == True)])
+        enabled = len(df[(df["Disabled"] == False)])
+        all = len(df)
+        
+        counts = [*counts, disabled, enabled, all]
+        indexes=[i for i in clusters]
+        indexes = [*indexes, "Disabled", "Enabled", "All"]
+        
+        rs = (pd.DataFrame({}, index=indexes))
+        rs["count"] = counts
+        return rs
+    
+    def extract_stats(self):
+        """Extracts the summarized stats
+        if self.raw_df.equals(self.sample_df):
+            self.raw_df.to_csv(stats_destination_path() + ".csv")
+            pass
+        else:
+            pass
+        """
+        if self.raw_df.equals(self.sample_df):
+            res = self.stats_for_df(self.sample_df)
+            print(res)
+        else:
+            res1 = self.stats_for_df(self.raw_df)["count"]
+            res2 = self.stats_for_df(self.sample_df)["count"]
+
+            df = pd.DataFrame({"Raw": res1, "Supervised": res2}, index=res1.index)
+            print(df)
+
+            
 
 
 class BigTing():
@@ -326,15 +500,7 @@ class BigTing():
                     cv.imshow(self.window.name, self.window.og_img)
 
             if self.window.refresh_on_next:
-                self.window.show_img()
-
-                if self.window.edit:
-                    st, lines = self.window.extract_stats()
-                    st_im = textbox(["lorem ipsum", "ipsum lorem"])  # lines)
-                    self.window.stats_img = st_im
-
-                self.change_stats_image()
-                self.window.update_contour_img(False)
+                self.window.update_contours()
                 self.window.refresh_on_next = False
 
             key = cv.waitKey(250)
@@ -380,20 +546,42 @@ class BigTing():
         rad_btn_val = tk.BooleanVar()
         rad_btn_frame.pack()
 
-        R1 = tk.Radiobutton(rad_btn_frame, text="SELECT", variable=rad_btn_val, value=True)
-        R2 = tk.Radiobutton(rad_btn_frame, text="EDIT", variable=rad_btn_val, value=False)
+        def togg_s():
+            self.window.set_edit_mode(False)
+
+        def togg_e():
+            self.window.set_edit_mode(True)
+
+        R1 = tk.Radiobutton(rad_btn_frame, text="SELECT",
+                            variable=rad_btn_val, value=True, command=togg_s)
+        R2 = tk.Radiobutton(rad_btn_frame, text="EDIT",
+                            variable=rad_btn_val, value=False, command=togg_e)
         R1.pack(anchor=tk.W, side=tk.LEFT)
         R2.pack(anchor=tk.W, side=tk.LEFT)
+
+
+        def update_checkboxes():
+            for i, key in enumerate(checkbox_vals):
+                val = checkbox_vals[key].get()
+                self.window.clusters[i].enabled = val
+            self.window.refresh_on_next = True
+
+        checkbox_vals = {i.name: tk.BooleanVar(value=True) for i in self.window.clusters}
+        checkboxes = {
+            i: tk.Checkbutton(
+                controls_frame, text=i, variable=checkbox_vals[i],onvalue=True, offvalue=False, command= update_checkboxes
+            ) for i in checkbox_vals.keys()
+        }
+
+        for cb in checkboxes.values():
+            cb.pack()
 
         btn_frame = tk.Frame(controls_frame)
         btn_frame.pack(fill="y", expand=True)
 
-        def a():
-            print(self.window.sample_df)
-
-        button1 = tk.Button(btn_frame, text="Save STATS", command=a)
-        button2 = tk.Button(btn_frame, text="Save DATA")
-        button3 = tk.Button(btn_frame, text="Dis-/Enable Contours")
+        button1 = tk.Button(btn_frame, text="Save STATS", command=self.window.extract_stats)
+        button2 = tk.Button(btn_frame, text="Save DATA", command=self.window.extract_data)
+        button3 = tk.Button(btn_frame, text="Dis-/Enable Contours", command=self.window.disable_contours)
         button1.pack()
         button2.pack()
         button3.pack()
@@ -405,7 +593,7 @@ class BigTing():
         root.mainloop()
 
     def change_stats_image(self):
-        im = Image.fromarray(np.zeros((200,400)))#self.window.stats_img)
+        im = Image.fromarray(np.zeros((200, 400)))  # self.window.stats_img)
         photo = ImageTk.PhotoImage(image=im)
         self.tk_photo.configure(image=photo)
         self.tk_photo.image = photo
@@ -422,7 +610,7 @@ class BigTing():
         # simulate continue on with other things
         await task1
         await task2
-        
+
     def run(self):
         asyncio.run(self.main())
 
@@ -441,9 +629,36 @@ def centroid(contour: np.ndarray) -> "tuple(int, int)":
     cy = int(M["m01"] / M["m00"])
     return (cx, cy)
 
-        
+# Output Constants
+OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
+TODAY = datetime.now().strftime("%Y-%m-%d")
+TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
+
+# Dynamic functions for saving results
+def now(): return datetime.now().strftime("%H-%M-%S")
+def data_destination_path_raw(): return f"{TODAY_DIR}/{now()}_raw-data"
+def data_destination_path_supervised(): return f"{TODAY_DIR}/{now()}_supervised-data"
+def stats_destination_path(): return f"{TODAY_DIR}/{now()}_stats"
+
+# Creating output files
+def create_dist_lib():
+    # TODO: further isolation of saved data of different quants
+    try:
+        os.listdir(OUTPUT_DIR)
+    except:
+        os.mkdir(OUTPUT_DIR)
+    try:
+        os.listdir(TODAY_DIR)
+    except:
+        os.mkdir(TODAY_DIR)
+create_dist_lib()
+
+
+def a(*args):
+    print(args)
+
+
 if __name__ == "__main__":
     # run the asyncio program
-    a = BigTing()
-    a.run()
-
+    bt = BigTing()
+    bt.run()
