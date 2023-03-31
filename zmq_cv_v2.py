@@ -269,7 +269,7 @@ class ImageWindow():
                 cv.drawContours(self.contour_img, [cnt],
                                 -1, color, cl.thickness)
 
-        cv.imshow(self.name, self.contour_img)
+        self.show_img()
         return
 
     def claster_by_name(self, cluster_name: str) -> Cluster:
@@ -283,16 +283,17 @@ class ImageWindow():
         if self.og_img is None or self.contour_img is None or not event:
             return
         point = (x, y)
-        print(point)
+        if VERBOSE:
+            print(f"Mouse-event at point: {point}")
 
         # Edit Mode
         if self.edit:
             if event == 4:
                 print("Dis-/Enable object")
-                obj = self.toggle_object(point)
+                self.disable_object(point)
             elif event == 2:
                 print("Rescore object")
-                obj = self.rescore_object(point)
+                self.rescore_object(point)
             else:
                 return
             self.refresh_on_next = True
@@ -304,27 +305,75 @@ class ImageWindow():
                 self.edit_df["Selected"] = False
                 self.select_object(point)
                 self.refresh_on_next = True
+            else:
+                return
 
     def select_object(self, point, multiple=False):
-        """Changes 'Selected' property """
-        condition = self.edit_df["Contours"].apply(
+        """Changes 'Selected' cell for the smallest object that contains the point"""
+        # Polygon test
+        condition = self.edit_df["Contour"].apply(
             lambda x: cv.pointPolygonTest(x[0], point, False) >= 0
         )
         filtered = self.edit_df[condition]
-        self.edit_df.loc[filtered.index, "Selected"] = True
+        #
+
+        min_area = filtered["Area"].min()
+        mn = filtered["Area"].apply(lambda x: x == min_area)
+
+        self.edit_df.loc[mn.index, "Selected"] = True
         return
 
     def disable_object(self, point):
-        """TODO"""
-        condition = self.edit_df["Contours"].apply(
+        """Toggles the 'Disabled' cell for the smallest object that contains the point
+
+        Args:
+            point (tuple(int, int)): reference point
+        """
+        # Polygon test
+        condition = self.edit_df["Contour"].apply(
+            lambda x: cv.pointPolygonTest(x, point, False) >= 0
+        )
+        filtered = self.edit_df[condition]
+        #
+        # Select min
+        min_area = filtered["Area"].min()
+        condition2 = filtered["Area"].apply(lambda x: x == min_area)
+        mn = filtered[condition2]
+
+        print(f"self.edit_df.loc[mn.index]:\n {self.edit_df.loc[mn.index]}")
+        new_val = self.edit_df.loc[mn.index, "Disabled"]
+        print(f"new_val: {new_val}")
+        self.edit_df.loc[mn.index, "Disabled"] = not new_val
+        return
+
+    def rescore_object(self, point):
+        """Changes the 'Cluster' cell for the smallest object that contains the point
+
+        Args:
+            point (tuple(int, int)): reference point
+        """
+        # Finding cluster indexes
+        clusters = self.edit_df["Cluster"].unique()
+        current_cl_i = clusters.index(
+            self.edit_df.loc[mn.index, "Cluster"])
+        next_cl_i = (current_cl_i + 1) % len(clusters)
+
+        # Logging
+        if VERBOSE:
+            print("Rescoring object\n{clusters[current_cl]}")
+
+        # Polygon test
+        condition = self.edit_df["Contour"].apply(
             lambda x: cv.pointPolygonTest(x[0], point, False) >= 0
         )
         filtered = self.edit_df[condition]
-        pass
+        #
 
-    def rescore_object(self, point):
-        """TODO"""
-        pass
+        min_area = filtered["Area"].max()
+        mn = filtered["Area"].apply(lambda x: x == min_area)
+
+        self.edit_df.loc[mn.index, "Cluster"] = clusters[next_cl_i]
+        return
 
 
 class BigTing():
@@ -385,8 +434,7 @@ class BigTing():
             self.confirm_req_complete()
         except:
             self.confirm_req_failed()
-        self.window.segmentation()
-        self.window.update_contour_img()
+        self.window.update_contour_img(segment=True)
         self.window.refresh_on_next = True
 
     def send_contours(self):
@@ -415,7 +463,12 @@ class BigTing():
     async def coroutine_image(self):
         """OpenCV image display coroutine"""
         print("Image Coroutine is running")
-        start_new_thread(self.coroutine_controls)
+
+        # Starting tkinter bg thread
+        thread = threading.Thread(target=self.coroutine_controls)
+        thread.start()
+
+        # Starting opencv loop
         j = 0
         while self.is_open:
             if VERBOSE:
@@ -559,33 +612,8 @@ def placeholder_func(*args):
     print(args)
 
 
-def find_object_for_point(point: "tuple(int, int)", df: pd.DataFrame, multi_select=False) -> pd.DataFrame:
-
-    series = df["Contour"]
-    p_test = np.array([cv.pointPolygonTest(x, point, False) for x in series])
-    print(p_test)
-    print(np.argwhere(p_test > -1).shape)
-    indexes = np.argwhere(p_test > -1)
-
-    if not np.any(p_test):
-        return pd.DataFrame({})
-
-    hits = df.loc[indexes.squeeze()]
-    a = hits["Area"].min()
-    min_area = hits.loc[hits["Area"] == a]
-
-    print(f"hits:\n{hits}")
-    print(a)
-    print(f"min_area:\n{min_area}")
-
-    if multi_select:
-        return hits
-
-    return min_area
-
-
 def centroid_for_contour(contour: np.ndarray) -> "tuple(int, int)":
-    """Calculates the center of a contour
+    """Calculates the centroid of a contour
 
     Args:
         contour (np.ndarray): polygon
@@ -599,18 +627,25 @@ def centroid_for_contour(contour: np.ndarray) -> "tuple(int, int)":
     return (cx, cy)
 
 
-def put_text(img: np.ndarray,
-             text: str,
-             org: "tuple(int, int)",
-             font=cv.FONT_HERSHEY_SIMPLEX,
-             fontScale: int = 1,
-             colors: "tuple(tuple(int, int, int), tuple(int, int, int))"
-             = ((0, 0, 0), (255, 255, 255)),
-             thickness: int = 3) -> np.ndarray:
-    im = cv.putText(img, text, org, font, fontScale,
-                    colors[0], thickness, cv.LINE_AA)
-    im = cv.putText(im, text, org, font, fontScale,
-                    colors[1], 1, cv.LINE_AA)
+def put_text(img: np.ndarray, text: str, org: "tuple(int, int)") -> np.ndarray:
+    """Puts bordered text on an image
+
+    Args:
+        img (np.ndarray): image to be drawn on
+        text (str): lines to be drawn
+        org (tuple): startpoint of the text
+
+    Returns:
+        np.ndarray: image with text
+    """
+    im = cv.putText(
+        img, text, org, cv.FONT_HERSHEY_SIMPLEX, 1,
+        (0, 0, 0), 3, cv.LINE_AA
+    )
+    im = cv.putText(
+        im, text, org, cv.FONT_HERSHEY_SIMPLEX, 1,
+        (255, 255, 255), 1, cv.LINE_AA
+    )
     return im
 
 

@@ -138,6 +138,8 @@ class ImageWindow():
         # TODO Resize!
         self.og_img = img.copy()
         self.contour_img = img.copy()
+        self.raw_df = MAINFRAME.copy()
+        self.sample_df = MAINFRAME.copy()
 
     def set_edit_mode(self, val: bool, *args):
         """Radiobutton event handler function, only executes if state is different from 'val' param
@@ -149,10 +151,10 @@ class ImageWindow():
             return
         else:
             self.edit = val
-            
+
             if VERBOSE:
                 print(f"EDIT MODE -> {self.edit}")
-            
+
             self.sample_df["Selected"] = False
             self.refresh_on_next = True
 
@@ -227,14 +229,14 @@ class ImageWindow():
             clusters = self.clusters
             row = i[1]
             cluster_names = list(map(lambda x: x.name, clusters))
-            
+
             if not clusters[cluster_names.index(row["Cluster"])].enabled:
                 continue
-            
+
             if row["Selected"]:
                 color = (0, 180, 0)
             elif row["Disabled"]:
-                color = (10, 10, 10)
+                color = (100, 100, 100)
             else:
                 color = clusters[cluster_names.index(row["Cluster"])].color
 
@@ -242,6 +244,12 @@ class ImageWindow():
 
         self.contour_img = im
         self.show_img()
+
+        if self.edit:
+            pass
+        else:
+            pass
+
 
     def mouse_event(self, event: int, x: int, y: int, flags: int, *args):
         """Callback function for 
@@ -265,8 +273,9 @@ class ImageWindow():
                 # Toggle 'Disabled' value
                 # Get
                 disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
+                # Set
                 self.sample_df.loc[hit.index,
-                                   "Disabled"] = not disabled_val  # Set
+                                   "Disabled"] = not disabled_val
 
                 self.refresh_on_next = True
             # RESCORE OBJECT
@@ -281,8 +290,9 @@ class ImageWindow():
                 cl_name = self.sample_df.loc[hit.index].iloc[0]["Cluster"]
                 cl_index = clusters.index(cl_name)
                 next_cl_index = (cl_index + 1) % len(clusters)
+                # Set
                 self.sample_df.loc[hit.index,
-                                   "Cluster"] = clusters[next_cl_index]  # Set
+                                   "Cluster"] = clusters[next_cl_index]
 
                 self.refresh_on_next = True
             else:
@@ -291,7 +301,7 @@ class ImageWindow():
         else:
             # MULTIPLE SELECT WITH LEFTCLICK
             if event == cv.EVENT_LBUTTONUP:
-                hit = self.df_polygon_test(point)
+                hit = self.df_polygon_test(point, False)
 
                 if hit.empty:
                     return
@@ -350,28 +360,8 @@ class ImageWindow():
                 print(f"Extracting modified data")
             self.raw_df.to_csv(data_destination_path_raw() + ".csv")
             self.sample_df.to_csv(data_destination_path_supervised() + ".csv")
-    
-    def stats_for_df(self, df):
-        clusters = df["Cluster"].unique()
-        counts = []
-        
-        for i in clusters:
-            counts.append(
-                len(df[(df["Cluster"] == i) & (df["Disabled"] == False)])
-            )
-        
-        disabled = len(df[(df["Disabled"] == True)])
-        enabled = len(df[(df["Disabled"] == False)])
-        all = len(df)
-        
-        counts = [*counts, disabled, enabled, all]
-        indexes=[i for i in clusters]
-        indexes = [*indexes, "Disabled", "Enabled", "All"]
-        
-        rs = (pd.DataFrame({}, index=indexes))
-        rs["count"] = counts
-        return rs
-    
+        self.extract_changelog()
+
     def extract_stats(self):
         """Extracts the summarized stats
         if self.raw_df.equals(self.sample_df):
@@ -381,17 +371,64 @@ class ImageWindow():
             pass
         """
         if self.raw_df.equals(self.sample_df):
-            res = self.stats_for_df(self.sample_df)
-            print(res)
+            df = self.stats_for_df(self.sample_df)
+            if VERBOSE:
+                print(df)
         else:
             res1 = self.stats_for_df(self.raw_df)["count"]
             res2 = self.stats_for_df(self.sample_df)["count"]
 
-            df = pd.DataFrame({"Raw": res1, "Supervised": res2}, index=res1.index)
-            print(df)
+            df = pd.DataFrame(
+                {"Raw": res1, "Supervised": res2}, index=res1.index)
 
-            
+            if VERBOSE:
+                print("Stats:\n")
+                print(df)
+            df.to_csv(stats_destination_path() + ".csv")
+        return df
 
+    def stats_for_df(self, df: pd.DataFrame):
+        clusters = df["Cluster"].unique()
+        counts = []
+
+        for i in clusters:
+            counts.append(
+                len(df[(df["Cluster"] == i) & (df["Disabled"] == False)])
+            )
+
+        disabled = len(df[(df["Disabled"] == True)])
+        enabled = len(df[(df["Disabled"] == False)])
+        all = len(df)
+
+        counts = [*counts, disabled, enabled, all]
+        indexes = [i for i in clusters]
+        indexes = [*indexes, "Disabled", "Enabled", "All"]
+
+        result = (pd.DataFrame({}, index=indexes))
+        result["count"] = counts
+        return result
+
+    def extract_changelog(self):
+        """Extracts the changes made during the supervision
+
+        Args:
+            args (_type_): _description_
+        """
+
+        r = self.raw_df.apply(pd.to_numeric, errors='coerce')
+        s = self.sample_df.apply(pd.to_numeric, errors='coerce')
+
+        # calculate difference
+        diff = r.sub(s, fill_value=0)
+        print(diff)
+
+    def extract_selected(self):
+        res = self.sample_df[self.sample_df["Selected"] == True]
+        res = res.drop(["Contour", "Selected"], axis=1)
+        res = res.transpose()
+        print(res.to_string)
+
+        return res
 
 class BigTing():
     def __init__(self):
@@ -401,8 +438,25 @@ class BigTing():
         self.is_open = True
         self.tk: tk.Tk = None
         self.tk_photo: np.ndarray = None
+        self.tk_text = None
 
         self.socket.bind(ZMQ_SERVERNAME)
+        
+    def change_stats(self):
+        if self.window.edit:
+            a = self.window.extract_stats().to_string()
+        else:
+            a = self.window.extract_selected().to_string()
+        
+        
+        self.tk_text.config(state=tk.NORMAL)
+        self.tk_text.delete('1.0', 'end')
+        self.tk_text.insert(tk.END, a)
+        self.tk_text.config(state=tk.DISABLED)
+        self.tk_text.pack()
+        print(a)        
+        if VERBOSE:
+            print("Changestats")
 
     def handle_message(self, msg: str):
         print(f"Command: {msg}, redirecting accordingly")
@@ -451,11 +505,16 @@ class BigTing():
             self.confirm_req_complete()
         except:
             self.confirm_req_failed()
-        self.window.update_contour_img(segment=True)
+        self.window.seg()
         self.window.refresh_on_next = True
-
+            
     def send_contours(self):
-        contours = [cl.contours for cl in self.window.clusters]
+        cl = [cl.name for cl in self.window.clusters]
+        df = self.window.sample_df
+        contours = [df[df["Cluster"] == c]["Contour"] for c in cl]
+        if VERBOSE:
+            print("Contours:")
+            print(contours)
         self.socket.send_pyobj(contours)
 
     async def coroutine_zmq(self):
@@ -467,7 +526,7 @@ class BigTing():
                 print(f"zmq iter: {i}")
             i += 1
             message = None
-            if self.socket.poll(100, zmq.POLLIN):
+            if self.socket.poll(250, zmq.POLLIN):
                 message = self.socket.recv_string()
                 self.handle_message(message)
             await asyncio.sleep(0)
@@ -501,6 +560,9 @@ class BigTing():
 
             if self.window.refresh_on_next:
                 self.window.update_contours()
+                
+                self.change_stats()
+                
                 self.window.refresh_on_next = False
 
             key = cv.waitKey(250)
@@ -508,6 +570,7 @@ class BigTing():
             # Breaks infinite loop if SPACE is pressed OR OpenCV window is closed
             if key == 32 or cv.getWindowProperty(self.window.name, cv.WND_PROP_VISIBLE) < 1:
                 self.is_open = False
+                self.tk.quit()
                 break
 
             await asyncio.sleep(0)
@@ -528,16 +591,29 @@ class BigTing():
         image_frame = tk.Frame(root)
         image_frame.pack(side="left", fill="both", padx=12, pady=12)
 
-        if self.window.stats_img is not None:
-            im = Image.fromarray(self.windwo.stats_img)
-        else:
-            im = Image.fromarray(np.zeros((200, 200)))
+        # if self.window.stats_img is not None:
+        #     im = Image.fromarray(self.windwo.stats_img)
+        # else:
+        #     im = Image.fromarray(np.zeros((200, 200)))
 
-        photo = ImageTk.PhotoImage(image=im)
+        # photo = ImageTk.PhotoImage(image=im)
 
-        image_label = tk.Label(image_frame, image=photo)
-        self.tk_photo = image_label
-        image_label.pack()
+        # image_label = tk.Label(image_frame, image=photo)
+        # self.tk_photo = image_label
+        # image_label.pack()
+
+
+        text = tk.Text(image_frame, font=("Helvetica", 16), width=20, height=8)
+
+        # Insert the dataframe into the text widget
+        text.config(state=tk.NORMAL)
+        text.insert(tk.END, self.window.extract_stats().to_string())
+        text.config(state=tk.DISABLED)
+
+        # Pack the text widget into the window
+        self.tk_text = text
+        self.tk_text.pack()
+
 
         controls_frame = tk.Frame(root)
         controls_frame.pack(fill="both", expand=True, padx=(0, 25), pady=25)
@@ -559,17 +635,17 @@ class BigTing():
         R1.pack(anchor=tk.W, side=tk.LEFT)
         R2.pack(anchor=tk.W, side=tk.LEFT)
 
-
         def update_checkboxes():
             for i, key in enumerate(checkbox_vals):
                 val = checkbox_vals[key].get()
                 self.window.clusters[i].enabled = val
             self.window.refresh_on_next = True
 
-        checkbox_vals = {i.name: tk.BooleanVar(value=True) for i in self.window.clusters}
+        checkbox_vals = {i.name: tk.BooleanVar(
+            value=True) for i in self.window.clusters}
         checkboxes = {
             i: tk.Checkbutton(
-                controls_frame, text=i, variable=checkbox_vals[i],onvalue=True, offvalue=False, command= update_checkboxes
+                controls_frame, text=i, variable=checkbox_vals[i], onvalue=True, offvalue=False, command=update_checkboxes
             ) for i in checkbox_vals.keys()
         }
 
@@ -579,9 +655,12 @@ class BigTing():
         btn_frame = tk.Frame(controls_frame)
         btn_frame.pack(fill="y", expand=True)
 
-        button1 = tk.Button(btn_frame, text="Save STATS", command=self.window.extract_stats)
-        button2 = tk.Button(btn_frame, text="Save DATA", command=self.window.extract_data)
-        button3 = tk.Button(btn_frame, text="Dis-/Enable Contours", command=self.window.disable_contours)
+        button1 = tk.Button(btn_frame, text="Save STATS",
+                            command=self.window.extract_stats)
+        button2 = tk.Button(btn_frame, text="Save DATA",
+                            command=self.window.extract_data)
+        button3 = tk.Button(btn_frame, text="Dis-/Enable Contours",
+                            command=self.window.disable_contours)
         button1.pack()
         button2.pack()
         button3.pack()
@@ -629,18 +708,24 @@ def centroid(contour: np.ndarray) -> "tuple(int, int)":
     cy = int(M["m01"] / M["m00"])
     return (cx, cy)
 
+
 # Output Constants
 OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
 TODAY = datetime.now().strftime("%Y-%m-%d")
 TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 
 # Dynamic functions for saving results
-def now(): return datetime.now().strftime("%H-%M-%S")
+
+
+def now(): return datetime.now().strftime("%H-%M")
 def data_destination_path_raw(): return f"{TODAY_DIR}/{now()}_raw-data"
-def data_destination_path_supervised(): return f"{TODAY_DIR}/{now()}_supervised-data"
+def data_destination_path_supervised(
+): return f"{TODAY_DIR}/{now()}_supervised-data"
 def stats_destination_path(): return f"{TODAY_DIR}/{now()}_stats"
 
 # Creating output files
+
+
 def create_dist_lib():
     # TODO: further isolation of saved data of different quants
     try:
@@ -651,6 +736,8 @@ def create_dist_lib():
         os.listdir(TODAY_DIR)
     except:
         os.mkdir(TODAY_DIR)
+
+
 create_dist_lib()
 
 

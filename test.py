@@ -1,4 +1,5 @@
 # %%
+import tkinter as tk
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -117,14 +118,35 @@ b
 
 
 # %%
-inverse = pd.Series(map(lambda x: not x, df.Disabled))
-inverse
-(df.Disabled)
+# Display a small dataframe on tkinter
+data = {'Name': ['John', 'Mary', 'Peter'],
+        'Age': [25, 30, 35],
+        'City': ['New York', 'London', 'Paris']}
+df_ = pd.DataFrame(data)
 
+# Create a tkinter window
+root = tk.Tk()
+
+# Set the window title and size
+root.title("Pandas DataFrame")
+root.geometry("300x150")
+
+# Create a tkinter text widget to display the dataframe
+text = tk.Text(root, font=("Helvetica", 16))
+
+# Set the text widget to read-only
+text.config(state=tk.DISABLED)
+
+# Insert the dataframe into the text widget
+text.config(state=tk.NORMAL)
+text.insert(tk.END, df_.transpose().to_string())
+text.config(state=tk.DISABLED)
+
+# Pack the text widget into the window
+text.pack()
+
+# Start the tkinter event loop
+root.mainloop()
 # %%
-df
-# %%
-df
-# %%
-df["Cluster"].unique()
+df[df["Disabled"] == False]
 # %%

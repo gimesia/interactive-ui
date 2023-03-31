@@ -3,17 +3,16 @@
 # the calculated contours and threshold parameters can be transferred back to ScriptQuant.
 # External process get started automatically by this script.
 # External process code can be found in ScriptQuant.Examples/interactive_ui.py.
-info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
-
-from datetime import date
-import os
-import subprocess
-import datetime
-import zmq
-import numpy as np
-import quantification as qc
-from ast import Return
 from pathlib import Path
+from ast import Return
+import quantification as qc
+import numpy as np
+import zmq
+import datetime
+import subprocess
+import os
+from datetime import date
+info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
 
 
 REQUEST_RETRIES = 1
@@ -31,13 +30,15 @@ logfile = None
 isPreview = False
 pythonPath = ""
 
+
 def create_out_dir():
     """Create output folder in the user's 'Downloads' folder
 
     Returns:
         str: output directory 
     """
-    output_dir = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
+    output_dir = os.path.join(
+        str(Path.home() / "Downloads"), "rescore_ui_output")
     today = date.today().strftime("%b-%d-%Y")
     today_dir = os.path.join(output_dir, today)
     try:
@@ -49,6 +50,7 @@ def create_out_dir():
     except:
         os.mkdir(today_dir)
     return today_dir
+
 
 output_dir = create_out_dir()
 logfilepath = f"{output_dir}\\log.txt"
