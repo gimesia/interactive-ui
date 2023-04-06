@@ -1,3 +1,4 @@
+info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
 # This example presents how zmq and subprocess can be used to create an external process, and communicate with it.
 # External process makes the calculation, and displays the result. If the user done with the settings of the threshold info,
 # the calculated contours and threshold parameters can be transferred back to ScriptQuant.
@@ -12,8 +13,6 @@ import datetime
 import subprocess
 import os
 from datetime import date
-info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
-
 
 REQUEST_RETRIES = 1
 REQUEST_TIMEOUT = 1000
@@ -31,30 +30,28 @@ isPreview = False
 pythonPath = ""
 
 
-def create_out_dir():
-    """Create output folder in the user's 'Downloads' folder
+# Output Constants
+OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
+TODAY = datetime.datetime.now().strftime("%Y-%m-%d")#datetime.now().strftime("%Y-%m-%d")
+TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 
-    Returns:
-        str: output directory 
-    """
-    output_dir = os.path.join(
-        str(Path.home() / "Downloads"), "rescore_ui_output")
-    today = date.today().strftime("%b-%d-%Y")
-    today_dir = os.path.join(output_dir, today)
+
+
+# Creating output files
+def create_dist_lib():
+    # TODO: further isolation of saved data of different quants
     try:
-        os.listdir(output_dir)
+        os.listdir(OUTPUT_DIR)
     except:
-        os.mkdir(output_dir)
+        os.mkdir(OUTPUT_DIR)
     try:
-        os.listdir(today_dir)
+        os.listdir(TODAY_DIR)
     except:
-        os.mkdir(today_dir)
-    return today_dir
+        os.mkdir(TODAY_DIR)
 
-
-output_dir = create_out_dir()
-logfilepath = f"{output_dir}\\log.txt"
-with open(f"{output_dir}\\log.txt", "w") as f:
+create_dist_lib()
+logfilepath = f"{OUTPUT_DIR}\\log.txt"
+with open(f"{OUTPUT_DIR}\\log.txt", "w") as f:
     f.write("Created log file!\n")
 
 
@@ -68,10 +65,10 @@ def start_process(thresholdinfo):
     logfile.write(f"{datetime.datetime.now()}:\n")
     logfile.flush()
 
-    external_process_start_command = [
-        pythonPath + "\\python.exe", externalprocesspath, str(isPreview), thresholdinfo]
-    external_process = subprocess.Popen(
-        external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
+    # external_process_start_command = [
+    #     pythonPath + "\\python.exe", externalprocesspath, str(isPreview), thresholdinfo]
+    # external_process = subprocess.Popen(
+    #     external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
 
 
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
