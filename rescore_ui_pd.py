@@ -171,6 +171,8 @@ class ImageWindow():
             im = self.contour_img.copy()
         else:
             im = self.og_img.copy()
+        cv.imshow(self.name, im)    
+        
             
     def seg(self):
         """TODO: Move this step outside this file, it should get only the contours"""
@@ -241,7 +243,6 @@ class ImageWindow():
                 color = clusters[cluster_names.index(row["Cluster"])].color
                        
             cv.drawContours(im, [row["Contour"]], -1, color, 1, cv.LINE_AA)
-            print(f"{i[0]} was drawn")
         self.contour_img = im
         self.show_img()
 
@@ -276,7 +277,7 @@ class ImageWindow():
                     if VERBOSE:
                         print(f"Adding new object")
                         
-                    contour = circle_contour(point, 8)
+                    contour = circle_contour(point, 12)
                     row = {"Cluster": "Negative", "Disabled": False, "Selected": False, "Contour": contour, "Center": (x, y), "Area": None}
                     self.sample_df = self.sample_df.append(row, ignore_index=True)
                     
@@ -349,14 +350,32 @@ class ImageWindow():
 
         mn = hits["Area"].min()
 
-        # If the minimum isnan (doesn't have Area), that means the obj was added manually
-        if pd.isna(mn):
-            return hits
-        else:
+        # If there is 'Area' for any of the hits, the smallest is returned
+        if not pd.isna(mn):
             condition2 = hits["Area"].apply(lambda x: x == mn)
             mn_hit = hits[condition2]
-
             return mn_hit
+        
+        # If the minimum isnan (doesn't have Area), that means the obj was added manually
+        else:
+            if len(hits) < 2:
+                return hits
+            else:
+                hits_ = hits.copy()
+                # Separating coordinates 
+                hits_["X"], hits_["Y"] = zip(*hits_["Center"])
+                # Calculating distance (Euclidean)
+                hits_["Euclidean_distance"] = np.sqrt((hits_["X"] - point[0]) ** 2 + (hits_["Y"] - point[1]) ** 2)
+                # Selecting the row with the shortest distance
+                mn_dst = hits_["Euclidean_distance"].min()
+                condition3 = hits_["Euclidean_distance"].apply(lambda x: x == mn_dst)
+                hits_ = hits_[condition3]
+                # Dropping helper columns
+                hits_ = hits_.drop(columns=["X", "Y", "Euclidean_distance"])
+
+                return hits_
+
+
 
     def extract_data(self):
         """Extracts data into destination files found in the end of the module
@@ -372,13 +391,8 @@ class ImageWindow():
             self.sample_df.to_csv(data_destination_path_supervised() + ".csv")
         self.extract_changelog()
 
-    def extract_stats(self):
-        """Extracts the summarized stats
-        if self.raw_df.equals(self.sample_df):
-            self.raw_df.to_csv(stats_destination_path() + ".csv")
-            pass
-        else:
-            pass
+    def extract_stats(self): 
+        """Extracts the summarized stats and saves it into destination file
         """
         if self.raw_df.equals(self.sample_df):
             df = self.stats_for_df(self.sample_df)
@@ -429,7 +443,40 @@ class ImageWindow():
         """Extracts the changes made during the supervision
         """
         # calculate difference
-        diff = self.raw_df.compare(self.sample_df)
+        print(self.raw_df)
+        print(self.sample_df)
+
+        print(self.raw_df.columns)
+        print(self.sample_df.columns)
+        
+        print(self.raw_df.index)
+        print(self.sample_df.index)
+            
+        
+        len_diff = len(self.sample_df) - len(self.raw_df)
+        if len_diff:
+
+
+            filled_raw = self.raw_df.copy()
+            self.sample_df.columns = self.raw_df.columns 
+
+            for i in range(len_diff):
+                filled_raw = filled_raw.append([np.NaN, np.NaN, np.NaN, np.NaN, np.NaN, np.NaN])
+
+            if self.sample_df.columns.equals(self.raw_df.columns):
+                
+                ## TODO NOTE: Somethings fucky
+                
+                diff = filled_raw.compare(self.sample_df)
+                print("Diff len")
+                print(diff)
+            else:
+                print("FOSSSS")
+        else:
+            diff = self.raw_df.compare(self.sample_df)
+            print("Same len")
+            print(diff)
+
         if VERBOSE:
             print(diff)
         return diff
