@@ -17,10 +17,22 @@ from stardist.nms import non_maximum_suppression
 from stardist.geometry import dist_to_coord
 from colour_deconvolution import ColourDeconvolution
 
-# Creating constants
+# Creating Config constants
 VERBOSE = True
+MAX_WINDOW_WIDTH = 1600
+
+# Dataframe constants
 COLUMNS = ["Cluster", "Disabled", "Contour", "Center", "Area"]
-# ZMQ messages
+MAINFRAME = pd.DataFrame({
+    "Cluster": [],
+    "Disabled": pd.Series([], dtype=bool),
+    "Selected": pd.Series([], dtype=bool),
+    "Contour": [],
+    "Center": [],
+    "Area": []
+}, columns=COLUMNS)
+
+# ZMQ message constants
 PING = "PING"
 THRESHOLD_INFO = "THRESHOLD_INFO"
 INP_IMAGE = "INP_IMAGE"
@@ -42,15 +54,6 @@ COLOUR_DECONVOLUTION = ColourDeconvolution([
 ])
 MODEL = StarDist2D.from_pretrained("2D_versatile_fluo")
 
-# Empty dataframe
-MAINFRAME = pd.DataFrame({
-    "Cluster": [],
-    "Disabled": pd.Series([], dtype=bool),
-    "Selected": pd.Series([], dtype=bool),
-    "Contour": [],
-    "Center": [],
-    "Area": []
-})
 
 
 def predict_contours(
@@ -92,7 +95,6 @@ def predict_contours(
 
 class Cluster():
     """Class for a class of identified objects"""
-
     def __init__(self, clustername: str, color: "tuple(int, int, int)", thickness: int):
         self.name = clustername
         self.color = color
@@ -118,12 +120,13 @@ class ImageWindow():
         self.refresh_on_next = False
         self.edit = True
 
-        # INITIALIZE OPENCV WINDOW
         # MOCK IMAGE
-        self.set_base_image(cv.imread("img/proto_img.tiff"))
+        self.set_base_image(cv.imread("img/proto_img.tiff")) 
 
-        # OPEN WINDOW AND DISPLAY CONTOURS
-        cv.namedWindow(self.name, cv.WINDOW_KEEPRATIO)
+        # INITIALIZE OPENCV WINDOW
+        cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
+        
+        # DISPLAY CONTOURS
         self.seg()
         self.update_contours()
 
@@ -135,7 +138,6 @@ class ImageWindow():
         Args:
             img (np.ndarray): 
         """
-        # TODO Resize!
         self.og_img = img.copy()
         self.contour_img = img.copy()
         self.raw_df = MAINFRAME.copy()
@@ -155,7 +157,7 @@ class ImageWindow():
             if VERBOSE:
                 print(f"EDIT MODE -> {self.edit}")
 
-            self.sample_df["Selected"] = False
+            self.sample_df["Selected"] = False # Resetting every row to unselected
             self.refresh_on_next = True
 
     def disable_contours(self):
@@ -165,15 +167,29 @@ class ImageWindow():
         self.show_img()
 
     def show_img(self) -> None:
-        """Displays image on window
+        """Displays image on window, with or without contours
         """
         if self.show_contours:
             im = self.contour_img.copy()
         else:
             im = self.og_img.copy()
-        cv.imshow(self.name, im)    
-        
             
+        cv.imshow(self.name, im) # Display image
+        
+        # If image is bigger than the desired value in constants,
+        # the window width does not surpass this value
+        if self.og_img.shape[1] > MAX_WINDOW_WIDTH:
+            self.resize_window() 
+
+        
+    def resize_window(self):
+        """Downsizes the window to the max window width (keeps aspect ratio)
+        """
+        sh = self.og_img.shape
+        aspect_ratio = sh[0] / sh[1]
+              
+        cv.resizeWindow(self.name, MAX_WINDOW_WIDTH, int(MAX_WINDOW_WIDTH * aspect_ratio))
+
     def seg(self):
         """TODO: Move this step outside this file, it should get only the contours"""
         img = self.og_img.copy()
@@ -198,9 +214,9 @@ class ImageWindow():
             )
 
             # Create series from segmented objects
-            conts_series = pd.Series(conts)
-            clusternames_series = pd.Series(
-                np.full_like(conts_series, cluster.name))
+            contour_series = pd.Series(conts)
+            clustername_series = pd.Series(
+                np.full_like(contour_series, cluster.name))
             area_series = pd.Series(
                 list(map(lambda cnt: cv.contourArea(cnt), conts)))
             centroid_series = pd.Series(
@@ -208,10 +224,10 @@ class ImageWindow():
 
             # Create df from series
             df = pd.DataFrame({
-                "Cluster": clusternames_series,
-                "Disabled": pd.Series(np.zeros_like(conts_series, dtype=bool)),
-                "Selected": pd.Series(np.zeros_like(conts_series, dtype=bool)),
-                "Contour": conts_series,
+                "Cluster": clustername_series,
+                "Disabled": pd.Series(np.zeros_like(contour_series, dtype=bool)),
+                "Selected": pd.Series(np.zeros_like(contour_series, dtype=bool)),
+                "Contour": contour_series,
                 "Center": centroid_series,
                 "Area": area_series
             })
@@ -395,19 +411,19 @@ class ImageWindow():
         """Extracts the summarized stats and saves it into destination file
         """
         if self.raw_df.equals(self.sample_df):
-            df = self.stats_for_df(self.sample_df)
+            stats_df = self.stats_for_df(self.sample_df)
         else:
             res1 = self.stats_for_df(self.raw_df)["count"]
             res2 = self.stats_for_df(self.sample_df)["count"]
 
-            df = pd.DataFrame(
+            stats_df = pd.DataFrame(
                 {"Raw": res1, "Supervised": res2}, index=res1.index)
 
             if VERBOSE:
                 print("Stats:\n")
-                print(df)
-            df.to_csv(stats_destination_path() + ".csv")
-        return df
+                print(stats_df)
+            stats_df.to_csv(stats_destination_path() + ".csv")
+        return stats_df
 
     def stats_for_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Extracts the statistics from an input df
@@ -443,40 +459,18 @@ class ImageWindow():
         """Extracts the changes made during the supervision
         """
         # calculate difference
-        print(self.raw_df)
-        print(self.sample_df)
-
-        print(self.raw_df.columns)
-        print(self.sample_df.columns)
-        
-        print(self.raw_df.index)
-        print(self.sample_df.index)
-            
-        
         len_diff = len(self.sample_df) - len(self.raw_df)
-        if len_diff:
-
-
+        
+        if len_diff: # if sample df has more rows then the raw
             filled_raw = self.raw_df.copy()
             self.sample_df.columns = self.raw_df.columns 
 
-            for i in range(len_diff):
-                filled_raw = filled_raw.append([np.NaN, np.NaN, np.NaN, np.NaN, np.NaN, np.NaN])
+            for i in range(len_diff): # Fill with empty rows
+                filled_raw = filled_raw.append(pd.Series([None]*len(filled_raw.columns), index=filled_raw.columns), ignore_index=True)
 
-            if self.sample_df.columns.equals(self.raw_df.columns):
-                
-                ## TODO NOTE: Somethings fucky
-                
-                diff = filled_raw.compare(self.sample_df)
-                print("Diff len")
-                print(diff)
-            else:
-                print("FOSSSS")
+            diff = filled_raw.compare(self.sample_df)
         else:
             diff = self.raw_df.compare(self.sample_df)
-            print("Same len")
-            print(diff)
-
         if VERBOSE:
             print(diff)
         return diff
@@ -575,6 +569,8 @@ class BigTing():
             message = cv.cvtColor(message, cv.COLOR_BGR2RGB)
             self.window.set_base_image(message)
             self.confirm_req_complete()
+            self.window.seg()
+            self.window.show_img()
         except:
             self.confirm_req_failed()
         self.window.refresh_on_next = True
