@@ -20,6 +20,7 @@ from colour_deconvolution import ColourDeconvolution
 # Creating Config constants
 VERBOSE = True
 MAX_WINDOW_WIDTH = 1600
+WAIT_TIME = 500
 
 # Dataframe constants
 COLUMNS = ["Cluster", "Disabled", "Contour", "Center", "Area"]
@@ -53,7 +54,6 @@ COLOUR_DECONVOLUTION = ColourDeconvolution([
     # [0, 0, 0]
 ])
 MODEL = StarDist2D.from_pretrained("2D_versatile_fluo")
-
 
 
 def predict_contours(
@@ -95,6 +95,7 @@ def predict_contours(
 
 class Cluster():
     """Class for a class of identified objects"""
+
     def __init__(self, clustername: str, color: "tuple(int, int, int)", thickness: int):
         self.name = clustername
         self.color = color
@@ -103,8 +104,9 @@ class Cluster():
 
 
 class ImageWindow():
-    def __init__(self, name="Interactive UI"):
-        # INITIALIZE VARIABLES
+    def __init__(self, ctrl, name="Interactive UI"):
+        self.ctrl: BigTing = ctrl
+        # NOTE: circular, because the window is stored
         self.clusters: list[Cluster] = [
             Cluster("Positive", (107, 76, 254), 1),
             Cluster("Negative", (250, 106, 17), 1),
@@ -121,16 +123,19 @@ class ImageWindow():
         self.edit = True
 
         # MOCK IMAGE
-        self.set_base_image(cv.imread("img/proto_img.tiff")) 
+        self.set_base_image(cv.imread("img/proto_img.tiff"))
 
         # INITIALIZE OPENCV WINDOW
         cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
-        
+
         # DISPLAY CONTOURS
-        self.seg()
+        self.segment()
         self.update_contours()
 
         cv.setMouseCallback(self.name, self.mouse_event)
+
+    def get_radius(self):
+        return self.ctrl.tk_radius_slider.get()
 
     def set_base_image(self, img: np.ndarray) -> None:
         """Set new image as reference in the object
@@ -153,11 +158,11 @@ class ImageWindow():
             return
         else:
             self.edit = val
-
             if VERBOSE:
                 print(f"EDIT MODE -> {self.edit}")
 
-            self.sample_df["Selected"] = False # Resetting every row to unselected
+            # Resetting every row to unselected
+            self.sample_df["Selected"] = False
             self.refresh_on_next = True
 
     def disable_contours(self):
@@ -173,24 +178,24 @@ class ImageWindow():
             im = self.contour_img.copy()
         else:
             im = self.og_img.copy()
-            
-        cv.imshow(self.name, im) # Display image
-        
+
+        cv.imshow(self.name, im)  # Display image
+
         # If image is bigger than the desired value in constants,
         # the window width does not surpass this value
         if self.og_img.shape[1] > MAX_WINDOW_WIDTH:
-            self.resize_window() 
+            self.resize_window()
 
-        
     def resize_window(self):
         """Downsizes the window to the max window width (keeps aspect ratio)
         """
         sh = self.og_img.shape
         aspect_ratio = sh[0] / sh[1]
-              
-        cv.resizeWindow(self.name, MAX_WINDOW_WIDTH, int(MAX_WINDOW_WIDTH * aspect_ratio))
 
-    def seg(self):
+        cv.resizeWindow(self.name, MAX_WINDOW_WIDTH,
+                        int(MAX_WINDOW_WIDTH * aspect_ratio))
+
+    def segment(self):
         """TODO: Move this step outside this file, it should get only the contours"""
         img = self.og_img.copy()
         self.sample_df = MAINFRAME.copy()
@@ -257,7 +262,7 @@ class ImageWindow():
                 color = (100, 100, 100)
             else:
                 color = clusters[cluster_names.index(row["Cluster"])].color
-                       
+
             cv.drawContours(im, [row["Contour"]], -1, color, 1, cv.LINE_AA)
         self.contour_img = im
         self.show_img()
@@ -274,7 +279,7 @@ class ImageWindow():
         point = (x, y)
         # EDIT MODE
         if self.edit:
-            # DIS-/ENABLED
+            # DIS-/ENABLE
             if event == cv.EVENT_LBUTTONUP:
                 if flag != 8:
                     hit = self.df_polygon_test(point, False)
@@ -285,39 +290,48 @@ class ImageWindow():
                     # Get
                     disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
                     # Set
-                    self.sample_df.loc[hit.index,
-                                    "Disabled"] = not disabled_val
+                    self.sample_df.loc[hit.index] = not disabled_val
 
                     self.refresh_on_next = True
-                else: # If ctrl is pressed down, a new entry is created
+                else:  # If ctrl is pressed down, a new entry is created
                     if VERBOSE:
                         print(f"Adding new object")
-                        
-                    contour = circle_contour(point, 12)
-                    row = {"Cluster": "Negative", "Disabled": False, "Selected": False, "Contour": contour, "Center": (x, y), "Area": None}
-                    self.sample_df = self.sample_df.append(row, ignore_index=True)
-                    
+
+                    contour = circle_contour(point, self.get_radius())
+                    row = {"Cluster": "Negative", "Disabled": False, "Selected": False,
+                           "Contour": contour, "Center": (x, y), "Area": None}
+                    self.sample_df = self.sample_df.append(
+                        row, ignore_index=True)
+
                     self.refresh_on_next = True
 
-            # RESCORE OBJECT
+            # RESCORE/DELETE OBJECT
             elif event == cv.EVENT_RBUTTONUP:
-                clusters = list(map(lambda cl: cl.name, self.clusters))
-
                 hit = self.df_polygon_test(point, False)
-                if hit.empty:
-                    return
 
+                if hit.empty:
+                        return
+                
+                # Delete if ctrl is pressed down during the click NOTE: bit buggy with the compare after the drop
+                """if flag == 8: 
+                        if hit.iloc[0]["Area"] == None: # Only delete if it was manually added
+                            self.sample_df = self.sample_df.drop(hit.index)
+                            self.refresh_on_next = True
+                        return
+                """
+                
                 # Get
+                clusters = list(map(lambda cl: cl.name, self.clusters))
                 cl_name = self.sample_df.loc[hit.index].iloc[0]["Cluster"]
                 cl_index = clusters.index(cl_name)
                 next_cl_index = (cl_index + 1) % len(clusters)
                 # Set
-                self.sample_df.loc[hit.index,
-                                   "Cluster"] = clusters[next_cl_index]
-
+                self.sample_df.loc[hit.index, "Cluster"] = clusters[next_cl_index]
                 self.refresh_on_next = True
+
             else:
                 return
+
         # SELECT MODE
         else:
             # MULTIPLE SELECT WITH LEFTCLICK
@@ -371,47 +385,48 @@ class ImageWindow():
             condition2 = hits["Area"].apply(lambda x: x == mn)
             mn_hit = hits[condition2]
             return mn_hit
-        
+
         # If the minimum isnan (doesn't have Area), that means the obj was added manually
         else:
             if len(hits) < 2:
                 return hits
             else:
                 hits_ = hits.copy()
-                # Separating coordinates 
+                # Separating coordinates
                 hits_["X"], hits_["Y"] = zip(*hits_["Center"])
                 # Calculating distance (Euclidean)
-                hits_["Euclidean_distance"] = np.sqrt((hits_["X"] - point[0]) ** 2 + (hits_["Y"] - point[1]) ** 2)
+                hits_["Euclidean_distance"] = np.sqrt(
+                    (hits_["X"] - point[0]) ** 2 + (hits_["Y"] - point[1]) ** 2)
                 # Selecting the row with the shortest distance
                 mn_dst = hits_["Euclidean_distance"].min()
-                condition3 = hits_["Euclidean_distance"].apply(lambda x: x == mn_dst)
+                condition3 = hits_["Euclidean_distance"].apply(
+                    lambda x: x == mn_dst)
                 hits_ = hits_[condition3]
                 # Dropping helper columns
                 hits_ = hits_.drop(columns=["X", "Y", "Euclidean_distance"])
 
                 return hits_
 
-
-
     def extract_data(self):
         """Extracts data into destination files found in the end of the module
         """
-        if self.raw_df.equals(self.sample_df):
+        if self.extract_changelog().empty:
             if VERBOSE:
                 print(f"Extracting unmodified data")
             self.raw_df.to_csv(data_destination_path_raw() + ".csv")
+
         else:
             if VERBOSE:
                 print(f"Extracting modified data")
             self.raw_df.to_csv(data_destination_path_raw() + ".csv")
             self.sample_df.to_csv(data_destination_path_supervised() + ".csv")
-        self.extract_changelog()
 
-    def extract_stats(self): 
+    def extract_stats(self):
         """Extracts the summarized stats and saves it into destination file
         """
-        if self.raw_df.equals(self.sample_df):
+        if self.extract_changelog().empty:
             stats_df = self.stats_for_df(self.sample_df)
+
         else:
             res1 = self.stats_for_df(self.raw_df)["count"]
             res2 = self.stats_for_df(self.sample_df)["count"]
@@ -460,19 +475,22 @@ class ImageWindow():
         """
         # calculate difference
         len_diff = len(self.sample_df) - len(self.raw_df)
-        
-        if len_diff: # if sample df has more rows then the raw
+
+        if len_diff != 0:  # if sample df has more rows then the raw
             filled_raw = self.raw_df.copy()
-            self.sample_df.columns = self.raw_df.columns 
+            self.sample_df.columns = self.raw_df.columns
 
-            for i in range(len_diff): # Fill with empty rows
-                filled_raw = filled_raw.append(pd.Series([None]*len(filled_raw.columns), index=filled_raw.columns), ignore_index=True)
+            for i in range(len_diff):  # Fill with empty rows
+                filled_raw = filled_raw.append(pd.Series(
+                    [None]*len(filled_raw.columns), index=filled_raw.columns), ignore_index=True)
 
+            print(f"raw:\n{len(filled_raw)}")
+            print(f"sample:\n{len(self.sample_df)}")
             diff = filled_raw.compare(self.sample_df)
+
         else:
             diff = self.raw_df.compare(self.sample_df)
-        if VERBOSE:
-            print(diff)
+
         return diff
 
     def extract_selected(self) -> pd.DataFrame:
@@ -492,10 +510,10 @@ class BigTing():
     def __init__(self):
         self.context: Context = Context()
         self.socket: Socket = self.context.socket(zmq.PAIR)
-        self.window = ImageWindow()
+        self.window = ImageWindow(self)
         self.is_open = True
         self.tk: tk.Tk = None
-        self.tk_photo: np.ndarray = None
+        self.tk_radius_slider = None
         self.tk_text = None  # Displayed text widget
 
         self.socket.bind(ZMQ_SERVERNAME)
@@ -569,13 +587,13 @@ class BigTing():
             message = cv.cvtColor(message, cv.COLOR_BGR2RGB)
             self.window.set_base_image(message)
             self.confirm_req_complete()
-            self.window.seg()
+            self.window.segment()
             self.window.show_img()
         except:
             self.confirm_req_failed()
         self.window.refresh_on_next = True
 
-    def send_contours(self):
+    def send_contours(self):  # Sending the array of the contours
         print("Sending contours")
         cl = [cl.name for cl in self.window.clusters]
         df = self.window.sample_df
@@ -595,7 +613,7 @@ class BigTing():
                 print(f"zmq iter: {i}")
             i += 1
             message = None
-            if self.socket.poll(250, zmq.POLLIN):
+            if self.socket.poll(WAIT_TIME, zmq.POLLIN):
                 message = self.socket.recv_string()
                 self.handle_message(message)
             await asyncio.sleep(0)
@@ -634,7 +652,7 @@ class BigTing():
 
                 self.window.refresh_on_next = False
 
-            key = cv.waitKey(250)
+            key = cv.waitKey(WAIT_TIME)
 
             # Breaks infinite loop if SPACE is pressed OR OpenCV window is closed
             if key == 32 or cv.getWindowProperty(self.window.name, cv.WND_PROP_VISIBLE) < 1:
@@ -669,17 +687,19 @@ class BigTing():
         self.tk_text.pack()
 
         controls_frame = tk.Frame(root)
-        controls_frame.pack(fill="both", expand=True, padx=(0, 25), pady=25)
+        controls_frame.pack(fill="both", expand=True, padx=(0, 5), pady=5)
 
         rad_btn_frame = tk.Frame(controls_frame)
         rad_btn_val = tk.BooleanVar()
-        rad_btn_frame.pack()
+        rad_btn_frame.pack(expand=True)
 
         def toggle_select():
             self.window.set_edit_mode(False)
+            self.tk_radius_slider.pack_forget()
 
         def toggle_edit():
             self.window.set_edit_mode(True)
+            self.tk_radius_slider.pack()
 
         R1 = tk.Radiobutton(rad_btn_frame, text="SELECT",
                             variable=rad_btn_val, value=True, command=toggle_select)
@@ -707,7 +727,7 @@ class BigTing():
             cb.pack()
 
         btn_frame = tk.Frame(controls_frame)
-        btn_frame.pack(fill="y", expand=True)
+        btn_frame.pack(fill="both", pady=15)
 
         button1 = tk.Button(btn_frame, text="Save STATS",
                             command=self.window.extract_stats)
@@ -717,10 +737,14 @@ class BigTing():
                             command=self.window.disable_contours)
         button4 = tk.Button(btn_frame, text="Changelog",
                             command=self.window.extract_changelog)
-        button1.pack()
-        button2.pack()
-        button3.pack()
-        button4.pack()
+        button1.grid(row=0, column=0, padx=5, pady=2)
+        button2.grid(row=1, column=0, padx=5, pady=2)
+        button3.grid(row=0, column=1, padx=5, pady=2)
+        button4.grid(row=1, column=1, padx=5, pady=2)
+
+        self.tk_radius_slider = tk.Scale(
+            controls_frame, from_=5, to=15, length=200, orient=tk.HORIZONTAL, label="Radius for new object")
+        self.tk_radius_slider.pack(fill="both", expand=True)
 
         def on_closing():
             self.is_open = False
@@ -760,6 +784,7 @@ def centroid(contour: np.ndarray) -> "tuple(int, int)":
     cy = int(M["m01"] / M["m00"])
     return (cx, cy)
 
+
 def circle_contour(center: "tuple(int, int)", radius: int):
     """Calculates the opencv contour of a circle
 
@@ -781,10 +806,8 @@ def circle_contour(center: "tuple(int, int)", radius: int):
     points = np.array(points)
 
     # Reshape to fit cv2.drawContours input format
-    points = points.reshape((-1,1,2))
+    points = points.reshape((-1, 1, 2))
     return points
-
-
 
 
 # Output Constants
