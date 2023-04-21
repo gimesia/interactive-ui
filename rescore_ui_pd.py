@@ -104,9 +104,7 @@ class Cluster():
 
 
 class ImageWindow():
-    def __init__(self, ctrl, name="Interactive UI"):
-        self.ctrl: BigTing = ctrl
-        # NOTE: circular, because the window is stored
+    def __init__(self, name="Interactive UI"):
         self.clusters: list[Cluster] = [
             Cluster("Positive", (107, 76, 254), 1),
             Cluster("Negative", (250, 106, 17), 1),
@@ -133,9 +131,6 @@ class ImageWindow():
         self.update_contours()
 
         cv.setMouseCallback(self.name, self.mouse_event)
-
-    def get_radius(self):
-        return self.ctrl.tk_radius_slider.get()
 
     def set_base_image(self, img: np.ndarray) -> None:
         """Set new image as reference in the object
@@ -481,11 +476,15 @@ class ImageWindow():
             self.sample_df.columns = self.raw_df.columns
 
             for i in range(len_diff):  # Fill with empty rows
-                filled_raw = filled_raw.append(pd.Series(
-                    [None]*len(filled_raw.columns), index=filled_raw.columns), ignore_index=True)
+                filled_raw = filled_raw.append(
+                    pd.Series([None]*len(filled_raw.columns), index=filled_raw.columns),
+                    ignore_index=True
+                )
 
-            print(f"raw:\n{len(filled_raw)}")
-            print(f"sample:\n{len(self.sample_df)}")
+            if VERBOSE:
+                print(f"raw:\n{len(filled_raw)}")
+                print(f"sample:\n{len(self.sample_df)}")
+            
             diff = filled_raw.compare(self.sample_df)
 
         else:
@@ -510,7 +509,7 @@ class BigTing():
     def __init__(self):
         self.context: Context = Context()
         self.socket: Socket = self.context.socket(zmq.PAIR)
-        self.window = ImageWindow(self)
+        self.window = ImageWindow()
         self.is_open = True
         self.tk: tk.Tk = None
         self.tk_radius_slider = None
