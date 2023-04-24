@@ -19,6 +19,13 @@ from stardist.nms import non_maximum_suppression
 from stardist.geometry import dist_to_coord
 from colour_deconvolution import ColourDeconvolution
 
+class Cluster():
+    """Class for a class of identified objects"""
+    def __init__(self, clustername: str, color: "tuple(int, int, int)", thickness: int=1):
+        self.name = clustername
+        self.color = color
+        self.thickness = thickness
+        self.enabled = True
 
 REQUEST_RETRIES = 1
 REQUEST_TIMEOUT = 1000
@@ -35,13 +42,14 @@ logfile = None
 isPreview = False
 pythonPath = ""
 
-
 # Output Constants
 OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
-TODAY = datetime.datetime.now().strftime("%Y-%m-%d")#datetime.now().strftime("%Y-%m-%d")
+TODAY = datetime.datetime.now().strftime("%Y-%m-%d") # datetime.now().strftime("%Y-%m-%d")
 TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 
+LOGFILE_PATH = f"{OUTPUT_DIR}\\log.txt"
 
+CLUSTERS = [Cluster("pos", (0, 0, 255)), Cluster("neg", (0, 255, 0))]
 
 # Creating output files
 def create_dist_lib():
@@ -55,77 +63,61 @@ def create_dist_lib():
     except:
         os.mkdir(TODAY_DIR)
 
-create_dist_lib()
-logfilepath = f"{OUTPUT_DIR}\\log.txt"
-with open(f"{OUTPUT_DIR}\\log.txt", "a") as f:
-    pass
 
-class Cluster():
-    """Class for a class of identified objects"""
-    def __init__(self, clustername: str, color: "tuple(int, int, int)", thickness: int):
-        self.name = clustername
-        self.color = color
-        self.thickness = thickness
-        self.enabled = True
-
-clusters = [Cluster("pos", (0, 0, 255)), Cluster("neg", (0, 0, 255))]
 
 # Start the external process with argument.
-def start_process(thresholdinfo):
-    global logfile, external_process
+def start_process(inp: qc.InitializeInput):
+    global logfile, external_process    
+    
+    create_dist_lib()
+    
     # A logfile created, and passed to the subprocess, so it can log any error into this file.
-    logfile = open(logfilepath, "a")
+    logfile = open(LOGFILE_PATH, "a")
     logfile.write(
         "-----------------------NEW PROCESS-----------------------\n")
     logfile.write(f"{datetime.datetime.now()}:\n")
     logfile.flush()
-
-    # external_process_start_command = [
-    #     pythonPath + "\\python.exe", externalprocesspath, str(isPreview), thresholdinfo]
-    # external_process = subprocess.Popen(
-    #     external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
-
-
-def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
-    global context, socket, isPreview, pythonPath, externalprocesspath
-    # .add("cl3", "#FFFF00").add("cl4", "#FF8800")
-    # out.clusters.add("Positive", "#FF0000").add("Negative", "#0000FF")
-    for i in clusters:
-        out.clusters.add(i.name, i.color) 
-    out.processing.tile_size = 1024
-    out.processing.tile_border_size = 128
-    out.processing.zoom = 2.5
-    isPreview = inp.environment.is_preview_segmentation
-   
-    # pythonPath = inp.environment.python_path
-    # externalprocesspath = inp.environment.app_path + \
-    #     "\\ScriptQuant.Examples\\Usecases\\interactive_ui_cv.py"
-    # Connect to the socket.
-  
+    
+    folders = os.listdir(OUTPUT_DIR)
+    print(folders)
+    if folders.index("python-rescore-ui")> -1 :
+        print("clone")
+    
     context = zmq.Context()
     socket = context.socket(zmq.PAIR)
     socket.setsockopt(zmq.LINGER, 100)
     socket.connect(SERVER_ENDPOINT)
 
-    # Check if any data saved into the scenario.
-    threshold_info = ""
-    if inp.saved_data != "":
-        threshold_info = inp.saved_data
+    #external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
+    #external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
 
-    # Check if external process is alive, if not, then start it.
     try:
-        # communicate("PING")
-        print(out.clusters)
-        start_process(threshold_info)
+        communicate("PING")
     except ExternalProcessNotRespondingException:
         print("External process is not responding. ScriptQuant tries to start the process.")
     finally:
-        start_process(threshold_info)
+        communicate("PING")
+
+def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
+    global context, socket, isPreview, pythonPath, externalprocesspath
+
+
+    for i in CLUSTERS:
+        out.clusters.add(
+            i.name,
+            '#{:02x}{:02x}{:02x}'.format(i.color[0], i.color[1], i.color[2])
+        ) 
+
+    out.processing.tile_size = 1024
+    out.processing.tile_border_size = 128
+    out.processing.zoom = 2.5
+    isPreview = inp.environment.is_preview_segmentation
+
 
 
 def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
     concentration_maps = COLOUR_DECONVOLUTION.get_concentration(inp.image, normalisation="scale")
-    for stain_index, cluster in enumerate(out.clusters):
+    for stain_index, cluster in enumerate(CLUSTERS):
         conts = list(
             np.rint(
                 predict_contours(
@@ -136,15 +128,18 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
                 )
             ).astype(int)
         )
-    for i, cl in enumerate(conts):
-        for polygon in cl:
+        for i, cnt in enumerate(conts):
             points = []
-            for j, p in enumerate(polygon):
-                if j == len(polygon) - 1:
-                    break
-                points.append((p[0], p[1]))
+            for point in cnt:
+                points.append((point[0], point[1]))
+            points.pop()
+        
             out.results.add_polygon(
-                i, points, custom_data=datetime.datetime.now().strftime("%c"))
+            stain_index, points, custom_data=datetime.datetime.now().strftime("%c"))
+    
+    if isPreview:
+        pass#start_process(inp)
+
 
 # This function only be used for close, delete all reserved resources.
 # Called when script/scenario/quantcenter closed, or in processing after end_tiling function finished.
