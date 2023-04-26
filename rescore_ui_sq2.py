@@ -6,6 +6,7 @@ info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
 # External process code can be found in ScriptQuant.Examples/interactive_ui.py.
 from pathlib import Path
 from ast import Return
+import time
 from turtle import pd
 import quantification as qc
 import numpy as np
@@ -33,6 +34,8 @@ SERVER_ENDPOINT = "tcp://localhost:5560"
 RETURN_TYPE_PYOBJ = 1
 RETURN_TYPE_STRING = 2
 RETURN_TYPE_UNKNOWN = 3
+INP_IMG = "INP_IMAGE"
+SEND_CNTS = "SEND_CONTOURS"
 
 context = None
 socket = None
@@ -66,8 +69,8 @@ def create_dist_lib():
 
 
 # Start the external process with argument.
-def start_process(inp: qc.InitializeInput):
-    global logfile, external_process    
+def start_process(inp: qc.InitializeInput, contours: np.ndarray):
+    global logfile, external_process, externalprocesspath, pythonPath, context, socket
     
     create_dist_lib()
     
@@ -78,29 +81,34 @@ def start_process(inp: qc.InitializeInput):
     logfile.write(f"{datetime.datetime.now()}:\n")
     logfile.flush()
     
-    folders = os.listdir(OUTPUT_DIR)
-    print(folders)
-    if folders.index("python-rescore-ui")> -1 :
-        print("clone")
-    
-    context = zmq.Context()
-    socket = context.socket(zmq.PAIR)
+
     socket.setsockopt(zmq.LINGER, 100)
     socket.connect(SERVER_ENDPOINT)
 
-    #external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
-    #external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
+    external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
+    external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
+
+    time.sleep(1)
 
     try:
         communicate("PING")
     except ExternalProcessNotRespondingException:
         print("External process is not responding. ScriptQuant tries to start the process.")
     finally:
-        communicate("PING")
-
+        communicate(INP_IMG)
+        communicate(inp.image)
+        communicate(SEND_CNTS)
+        communicate(contours)
+        
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     global context, socket, isPreview, pythonPath, externalprocesspath
+    
+    isPreview = inp.environment.is_preview_segmentation
+    pythonPath = inp.environment.python_path
+    externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
 
+    context = zmq.Context()
+    socket = context.socket(zmq.PAIR)
 
     for i in CLUSTERS:
         out.clusters.add(
@@ -117,6 +125,7 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
 
 def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
     concentration_maps = COLOUR_DECONVOLUTION.get_concentration(inp.image, normalisation="scale")
+    contours = []
     for stain_index, cluster in enumerate(CLUSTERS):
         conts = list(
             np.rint(
@@ -128,6 +137,9 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
                 )
             ).astype(int)
         )
+        
+        contours.append(conts)
+        
         for i, cnt in enumerate(conts):
             points = []
             for point in cnt:
@@ -138,7 +150,7 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
             stain_index, points, custom_data=datetime.datetime.now().strftime("%c"))
     
     if isPreview:
-        pass#start_process(inp)
+        start_process(inp, contours)
 
 
 # This function only be used for close, delete all reserved resources.
@@ -179,12 +191,14 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
         if socket.poll(timeout, zmq.POLLIN):
             if returntype == RETURN_TYPE_STRING:
                 reply = socket.recv_string()
-                print(f"Reply: {reply}")
+            
             elif returntype == RETURN_TYPE_PYOBJ:
                 reply = socket.recv_pyobj()
+            
             elif returntype == RETURN_TYPE_UNKNOWN:
                 reply = socket.recv()
-                print(f"Reply: {reply}")
+            
+            print(f"Reply: {reply}")
             return reply
 
         retries_left -= 1
@@ -243,4 +257,4 @@ def predict_contours(
         axis=2
     )
     return contours
-
+ 

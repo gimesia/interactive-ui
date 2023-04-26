@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from zmq import Context, Socket
 import zmq
-from PIL import Image, ImageTk
 from stardist.models import StarDist2D
 from stardist.nms import non_maximum_suppression
 from stardist.geometry import dist_to_coord
@@ -36,10 +35,10 @@ MAINFRAME = pd.DataFrame({
 # ZMQ message constants
 PING = "PING"
 THRESHOLD_INFO = "THRESHOLD_INFO"
-INP_IMAGE = "INP_IMAGE"
-QUERY_CONTOUR = "QUERY_CONTOUR"
-RECEIVE_CONTOUR = "RECEIVE_CONTOUR"
-REQ_RECEIVED = "REQUEST_RECEIVED"
+INP_IMG = "INP_IMAGE"
+SEND_CNTRS = "SEND_CONTOURS"
+REC_CNTRS = "RECEIVE_CONTOURS"
+REQ_CONFIRM = "REQUEST_RECEIVED"
 DONE = "DONE"
 FAILED = "FAILED"
 ALIVE = "ALIVE"
@@ -122,14 +121,14 @@ class ImageWindow():
         self.edit = True
 
         # MOCK IMAGE
-        self.set_base_image(cv.imread("img/proto_img.tiff"))
+        # self.set_base_image(cv.imread("img/proto_img.tiff"))
 
         # INITIALIZE OPENCV WINDOW
         cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
 
         # DISPLAY CONTOURS
-        self.segment()
-        self.update_contours()
+        # self.segment()
+        # self.update_contours()
 
         cv.setMouseCallback(self.name, self.mouse_event)
 
@@ -192,7 +191,8 @@ class ImageWindow():
                         int(MAX_WINDOW_WIDTH * aspect_ratio))
 
     def segment(self):
-        """TODO: Move this step outside this file, it should get only the contours"""
+        if self.og_img is None:
+            return
         img = self.og_img.copy()
         self.sample_df = MAINFRAME.copy()
 
@@ -546,12 +546,14 @@ class BigTing():
         print(f"Command: {msg}, redirecting accordingly")
         if msg == PING:
             self.pong()
-        elif msg == INP_IMAGE:
+        elif msg == INP_IMG:
             self.receive_image()
-        elif msg == QUERY_CONTOUR:
+        elif msg == SEND_CNTR:
             self.send_contours()
         elif msg == EXIT:
             self.confirm_exit(True)
+        elif msg == REC_CNTR:
+            self.receive_contours()
         else:
             self.socket.send_string(f"{msg}")
 
@@ -560,7 +562,7 @@ class BigTing():
 
     def confirm_req(self):  # Sends confirmation of received request
         print("Sending confirmation of received request")
-        self.socket.send_string(REQ_RECEIVED)
+        self.socket.send_string(REQ_CONFIRM)
 
     def confirm_req_complete(self):  # Sends confirmation of received request
         print("Sending confirmation")
@@ -577,9 +579,6 @@ class BigTing():
         self.socket.send_string("q")
 
     def receive_image(self):  # Reception of image from socket
-        global now
-        now = datetime.now().strftime("%H-%M-%S")
-
         print("Receiving image")
         self.confirm_req()
         message = self.socket.recv_pyobj()
@@ -589,6 +588,18 @@ class BigTing():
             self.confirm_req_complete()
             self.window.segment()
             self.window.show_img()
+        except:
+            self.confirm_req_failed()
+        self.window.refresh_on_next = True
+    
+    def receive_contours(self):
+        print("Receiving contours")
+        self.confirm_req()
+        message = self.socket.recv_pyobj()
+        try:
+            for i, cnts in message:
+                print(f"{self.window.clusters[i]}: {cnts}")
+            self.window.update_contours()
         except:
             self.confirm_req_failed()
         self.window.refresh_on_next = True
