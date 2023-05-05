@@ -4,7 +4,6 @@ info = {"title": "Interactive UI", "requirements": ["pyzmq", "pandas"]}
 # the calculated contours and threshold parameters can be transferred back to ScriptQuant.
 # External process get started automatically by this script.
 # External process code can be found in ScriptQuant.Examples/interactive_ui.py.
-
 from pathlib import Path
 from ast import Return
 import time
@@ -23,13 +22,11 @@ from colour_deconvolution import ColourDeconvolution
 
 class Cluster():
     """Class for a class of identified objects"""
-
-    def __init__(self, clustername: str, color: "tuple(int, int, int)", thickness: int = 1):
+    def __init__(self, clustername: str, color: "tuple(int, int, int)", thickness: int=1):
         self.name = clustername
         self.color = color
         self.thickness = thickness
         self.enabled = True
-
 
 REQUEST_RETRIES = 1
 REQUEST_TIMEOUT = 1000
@@ -37,9 +34,11 @@ SERVER_ENDPOINT = "tcp://localhost:5560"
 RETURN_TYPE_PYOBJ = 1
 RETURN_TYPE_STRING = 2
 RETURN_TYPE_UNKNOWN = 3
+INP_ORG = "INP_ORIGIN"
 INP_IMG = "INP_IMAGE"
-SEND_CNTS = "SEND_CONTOURS"
 INP_CNTRS = "INP_CONTOURS"
+SEND_CNTS = "SEND_CONTOURS"
+WIN_SIZE = "WINDOW_SIZE"
 
 context = None
 socket = None
@@ -51,17 +50,14 @@ pythonPath = ""
 
 # Output Constants
 OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
-TODAY = datetime.datetime.now().strftime(
-    "%Y-%m-%d")  # datetime.now().strftime("%Y-%m-%d")
+TODAY = datetime.datetime.now().strftime("%Y-%m-%d") # datetime.now().strftime("%Y-%m-%d")
 TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 
 LOGFILE_PATH = f"{OUTPUT_DIR}\\log.txt"
 
-CLUSTERS = [Cluster("pos", (0, 0, 255)), Cluster("neg", (0, 255, 0))]
+CLUSTERS = [Cluster("NEGATIVE", (0, 0, 255)), Cluster("POSITIVE", (255, 0, 0))]
 
 # Creating output files
-
-
 def create_dist_lib():
     # TODO: further isolation of saved data of different quants
     try:
@@ -74,24 +70,26 @@ def create_dist_lib():
         os.mkdir(TODAY_DIR)
 
 
+
 # Start the external process with argument.
-def start_process(inp: qc.InitializeInput, contours: np.ndarray):
+def start_process(inp: qc.ProcessInput, contours: np.ndarray):
     global logfile, external_process, externalprocesspath, pythonPath, context, socket
-
+    
     create_dist_lib()
-
+    
     # A logfile created, and passed to the subprocess, so it can log any error into this file.
     logfile = open(LOGFILE_PATH, "a")
     logfile.write(
         "-----------------------NEW PROCESS-----------------------\n")
     logfile.write(f"{datetime.datetime.now()}:\n")
     logfile.flush()
+    
 
     socket.setsockopt(zmq.LINGER, 100)
     socket.connect(SERVER_ENDPOINT)
 
-    # external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
-    # external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
+    #external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
+    #external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
 
     time.sleep(1)
 
@@ -102,17 +100,24 @@ def start_process(inp: qc.InitializeInput, contours: np.ndarray):
     finally:
         communicate(INP_IMG)
         communicate(inp.image)
-        time.sleep(1)
+        time.sleep(0.5)
+        communicate(WIN_SIZE)
+        communicate(inp.ui_values["trackbar"])
+        time.sleep(0.5)
         communicate(INP_CNTRS)
         communicate(contours)
-
-
+        communicate(INP_ORG)
+        communicate((inp.tile_info.roi.topleft_x, inp.tile_info.roi.topleft_y))
+        
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     global context, socket, isPreview, pythonPath, externalprocesspath
-
+    
+    out.ui.add_trackbar("trackbar", "Window width", 1080, 1928, 1600, 212)
+    
     isPreview = inp.environment.is_preview_segmentation
     pythonPath = inp.environment.python_path
-    externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
+    # externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
+    externalprocesspath = os.path.dirname(inp.environment.scenario_path) + "\\rescore_ui_pd.py"
 
     context = zmq.Context()
     socket = context.socket(zmq.PAIR)
@@ -121,17 +126,17 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
         out.clusters.add(
             i.name,
             '#{:02x}{:02x}{:02x}'.format(i.color[0], i.color[1], i.color[2])
-        )
+        ) 
 
     out.processing.tile_size = 1024
     out.processing.tile_border_size = 128
     out.processing.zoom = 2.5
     isPreview = inp.environment.is_preview_segmentation
+    
 
 
 def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
-    concentration_maps = COLOUR_DECONVOLUTION.get_concentration(
-        inp.image, normalisation="scale")
+    concentration_maps = COLOUR_DECONVOLUTION.get_concentration(inp.image, normalisation="scale")
     contours = []
     for stain_index, cluster in enumerate(CLUSTERS):
         conts = list(
@@ -144,18 +149,18 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
                 )
             ).astype(int)
         )
-
+        
         contours.append(conts)
-
+        
         for i, cnt in enumerate(conts):
             points = []
             for point in cnt:
                 points.append((point[0], point[1]))
             points.pop()
-
+        
             out.results.add_polygon(
-                stain_index, points, custom_data=datetime.datetime.now().strftime("%c"))
-
+            stain_index, points, custom_data=datetime.datetime.now().strftime("%c"))
+    
     if isPreview:
         start_process(inp, contours)
 
@@ -198,13 +203,13 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
         if socket.poll(timeout, zmq.POLLIN):
             if returntype == RETURN_TYPE_STRING:
                 reply = socket.recv_string()
-
+            
             elif returntype == RETURN_TYPE_PYOBJ:
                 reply = socket.recv_pyobj()
-
+            
             elif returntype == RETURN_TYPE_UNKNOWN:
                 reply = socket.recv()
-
+            
             print(f"Reply: {reply}")
             return reply
 
@@ -221,7 +226,6 @@ def communicate(request, returntype=RETURN_TYPE_STRING, timeout=REQUEST_TIMEOUT)
 class ExternalProcessNotRespondingException(Exception):
     pass
 
-
 REFERENCE_UMPP = 0.125
 COLOUR_DECONVOLUTION = ColourDeconvolution([
     [0.650, 0.704, 0.286],
@@ -229,7 +233,6 @@ COLOUR_DECONVOLUTION = ColourDeconvolution([
     # [0, 0, 0]
 ])
 MODEL = StarDist2D.from_pretrained("2D_versatile_fluo")
-
 
 def predict_contours(
         stardist_model: StarDist2D,
@@ -266,3 +269,4 @@ def predict_contours(
         axis=2
     )
     return contours
+ 

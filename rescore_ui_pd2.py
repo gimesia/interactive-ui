@@ -1,5 +1,4 @@
 import asyncio
-import csv
 from datetime import datetime
 import math
 import os
@@ -14,26 +13,28 @@ import zmq
 
 # Creating Config constants
 VERBOSE = True
-MAX_WINDOW_WIDTH = 1600
-WAIT_TIME = 500
+WAIT_TIME = 250
+
+max_width = 1600
 
 # Dataframe constants
-COLUMNS = ["Cluster", "Disabled", "Contour", "Center", "Area"]
+COLUMNS = ["Cluster", "Disabled", "Contour", "Center_REL", "Area"]
 MAINFRAME = pd.DataFrame({
     "Cluster": [],
     "Disabled": pd.Series([], dtype=bool),
     "Selected": pd.Series([], dtype=bool),
     "Contour": [],
-    "Center": [],
+    "Center_REL": [],
     "Area": []
 }, columns=COLUMNS)
 
 # ZMQ message constants
 PING = "PING"
 THRESHOLD_INFO = "THRESHOLD_INFO"
+INP_ORG = "INP_ORIGIN"
 INP_IMG = "INP_IMAGE"
-SEND_CNTRS = "SEND_CONTOURS"
 INP_CNTRS = "INP_CONTOURS"
+SEND_CNTRS = "SEND_CONTOURS"
 REQ_CONFIRM = "REQUEST_CONFIRMED"
 DONE = "DONE"
 FAILED = "FAILED"
@@ -41,7 +42,7 @@ ALIVE = "ALIVE"
 EXIT = "EXIT"
 UNKNOWN = "UNKNOWN"
 ZMQ_SERVERNAME = "tcp://*:5560"
-
+WIN_SIZE = "WINDOW_SIZE"
 
 class Cluster():
     """Class for a class of identified objects"""
@@ -54,7 +55,7 @@ class Cluster():
 
 
 class ImageWindow():
-    def __init__(self, name="Interactive UI"):
+    def __init__(self, name="RESCORE UI"):
         self.clusters: list[Cluster] = [
             Cluster("Negative", (255, 10, 0), 1),
             Cluster("Positive", (0, 10, 255), 1),
@@ -70,6 +71,7 @@ class ImageWindow():
         self.refresh_on_next = False
         self.edit = True
         self.radius = 5
+        self.origin = (0, 0)
 
         # MOCK IMAGE
         # self.set_base_image(cv.imread("img/proto_img.tiff"))
@@ -77,8 +79,6 @@ class ImageWindow():
         # INITIALIZE OPENCV WINDOW
         cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
 
-        # DISPLAY CONTOURS
-        # self.segment()
         # self.update_contours()
 
         cv.setMouseCallback(self.name, self.mouse_event)
@@ -129,7 +129,7 @@ class ImageWindow():
 
         # If image is bigger than the desired value in constants,
         # the window width does not surpass this value
-        if self.og_img.shape[1] > MAX_WINDOW_WIDTH:
+        if self.og_img.shape[1] > max_width:
             self.resize_window()
 
     def resize_window(self):
@@ -138,8 +138,8 @@ class ImageWindow():
         sh = self.og_img.shape
         aspect_ratio = sh[0] / sh[1]
 
-        cv.resizeWindow(self.name, MAX_WINDOW_WIDTH,
-                        int(MAX_WINDOW_WIDTH * aspect_ratio))
+        cv.resizeWindow(self.name, max_width,
+                        int(max_width * aspect_ratio))
 
     def update_contours(self):
         """Updates the contours on the image based on the 'sample_df' object variable
@@ -151,10 +151,10 @@ class ImageWindow():
             row = i[1]
             cluster_names = list(map(lambda x: x.name, clusters))
 
-            print(f"{row['Cluster']}")
-            print(f"{cluster_names}")
-            print(f"{cluster_names.index(row['Cluster'])}")
-            print(f"{clusters[cluster_names.index(row['Cluster'])]}")
+            # print(f"{row['Cluster']}")
+            # print(f"{cluster_names}")
+            # print(f"{cluster_names.index(row['Cluster'])}")
+            # print(f"{clusters[cluster_names.index(row['Cluster'])]}")
 
             if not clusters[cluster_names.index(row["Cluster"])].enabled:
                 continue
@@ -165,7 +165,9 @@ class ImageWindow():
                 color = (100, 100, 100)
             else:
                 color = clusters[cluster_names.index(row["Cluster"])].color
-
+                
+            # print(color)
+            
             cv.drawContours(im, [row["Contour"]], -1, color, 1, cv.LINE_AA)
         self.contour_img = im
         self.show_img()
@@ -193,7 +195,7 @@ class ImageWindow():
                     # Get
                     disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
                     # Set
-                    self.sample_df.loc[hit.index] = not disabled_val
+                    self.sample_df.loc[hit.index]["Disabled"] = not disabled_val
 
                     self.refresh_on_next = True
                 else:  # If ctrl is pressed down, a new entry is created
@@ -201,8 +203,8 @@ class ImageWindow():
                         print(f"Adding new object")
 
                     contour = circle_contour(point, self.radius)
-                    row = {"Cluster": "Negative", "Disabled": False, "Selected": False,
-                           "Contour": contour, "Center": (x, y), "Area": None}
+                    row = {"Cluster": self.clusters[0].name, "Disabled": False, "Selected": False,
+                           "Contour": contour, "Center_REL": (x, y), "Area": None}
                     self.sample_df = self.sample_df.append(
                         row, ignore_index=True)
 
@@ -213,8 +215,8 @@ class ImageWindow():
                 hit = self.df_polygon_test(point, False)
 
                 if hit.empty:
-                    return
-
+                        return
+                
                 # Delete if ctrl is pressed down during the click NOTE: bit buggy with the compare after the drop
                 """if flag == 8: 
                         if hit.iloc[0]["Area"] == None: # Only delete if it was manually added
@@ -222,15 +224,14 @@ class ImageWindow():
                             self.refresh_on_next = True
                         return
                 """
-
+                
                 # Get
                 clusters = list(map(lambda cl: cl.name, self.clusters))
                 cl_name = self.sample_df.loc[hit.index].iloc[0]["Cluster"]
                 cl_index = clusters.index(cl_name)
                 next_cl_index = (cl_index + 1) % len(clusters)
                 # Set
-                self.sample_df.loc[hit.index,
-                                   "Cluster"] = clusters[next_cl_index]
+                self.sample_df.loc[hit.index, "Cluster"] = clusters[next_cl_index]
                 self.refresh_on_next = True
 
             else:
@@ -297,7 +298,7 @@ class ImageWindow():
             else:
                 hits_ = hits.copy()
                 # Separating coordinates
-                hits_["X"], hits_["Y"] = zip(*hits_["Center"])
+                hits_["X"], hits_["Y"] = zip(*hits_["Center_REL"])
                 # Calculating distance (Euclidean)
                 hits_["Euclidean_distance"] = np.sqrt(
                     (hits_["X"] - point[0]) ** 2 + (hits_["Y"] - point[1]) ** 2)
@@ -317,13 +318,25 @@ class ImageWindow():
         if self.extract_changelog().empty:
             if VERBOSE:
                 print(f"Extracting unmodified data")
-            self.raw_df.to_csv(data_destination_path_raw() + ".csv")
+
+            df = self.raw_df.copy()
+            df["Center_ABS"] = df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            df.to_csv(data_destination_path_raw() + ".csv")
 
         else:
             if VERBOSE:
                 print(f"Extracting modified data")
-            self.raw_df.to_csv(data_destination_path_raw() + ".csv")
-            self.sample_df.to_csv(data_destination_path_supervised() + ".csv")
+
+            r_df = self.raw_df.copy()
+            r_df["Center_ABS"] = r_df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            s_df = self.raw_df.copy()
+            s_df["Center_ABS"] = s_df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+
+            r_df.to_csv(data_destination_path_raw() + ".csv")
+            s_df.to_csv(data_destination_path_supervised() + ".csv")
+            
+            print(r_df)
+            print(s_df)
 
     def extract_stats(self):
         """Extracts the summarized stats and saves it into destination file
@@ -368,7 +381,7 @@ class ImageWindow():
 
         counts = [*counts, disabled, enabled, all]
         indexes = [cl for cl in clusters]
-        indexes = [*indexes, "Disabled", "Enabled", "All"]
+        indexes = [*indexes, "Disabled", "Enabled", "Summa"]
 
         result = (pd.DataFrame({}, index=indexes))
         result["count"] = counts
@@ -386,20 +399,19 @@ class ImageWindow():
 
             for i in range(len_diff):  # Fill with empty rows
                 filled_raw = filled_raw.append(
-                    pd.Series([None]*len(filled_raw.columns),
-                              index=filled_raw.columns),
+                    pd.Series([None]*len(filled_raw.columns), index=filled_raw.columns),
                     ignore_index=True
                 )
 
             if VERBOSE:
                 print(f"raw:\n{len(filled_raw)}")
                 print(f"sample:\n{len(self.sample_df)}")
-
+            
             diff = filled_raw.compare(self.sample_df)
 
         else:
             diff = self.raw_df.compare(self.sample_df)
-
+        print(diff)
         return diff
 
     def extract_selected(self) -> pd.DataFrame:
@@ -454,7 +466,7 @@ class BigTing():
         """
         print(f"Command: {msg}, redirecting accordingly")
         if msg == PING:
-            self.pong()
+            self.socket.send_string(ALIVE)
         elif msg == INP_IMG:
             self.receive_image()
         elif msg == SEND_CNTRS:
@@ -463,21 +475,31 @@ class BigTing():
             self.confirm_exit(True)
         elif msg == INP_CNTRS:
             self.receive_contours()
+        elif msg == INP_ORG:
+            self.confirm_req()
+            origin = self.socket.recv_pyobj()
+            self.window.origin = origin
+            self.req_complete()
+        elif msg == WIN_SIZE:
+            global max_width
+            self.confirm_req()
+            msg = self.socket.recv_pyobj()
+            max_width = msg
+            self.window.resize_window()
+            self.req_complete()
+            
         else:
             self.socket.send_string(f"{msg}")
-
-    def pong(self):  # Answer to ping
-        self.socket.send_string(ALIVE)
 
     def confirm_req(self):  # Sends confirmation of received request
         print("Sending confirmation of received request")
         self.socket.send_string(REQ_CONFIRM)
 
-    def confirm_req_complete(self):  # Sends confirmation of received request
+    def req_complete(self):  # Sends confirmation of received request
         print("Sending confirmation of request status: DONE")
         self.socket.send_string(DONE)
 
-    def confirm_req_failed(self):  # Sends receit of failed request
+    def req_failed(self):  # Sends receit of failed request
         print("Sending fail receipt")
         self.socket.send_string(FAILED)
 
@@ -495,11 +517,11 @@ class BigTing():
             message = cv.cvtColor(message, cv.COLOR_BGR2RGB)
             self.window.set_base_image(message)
             self.window.show_img()
-            self.confirm_req_complete()
+            self.req_complete()
         except:
-            self.confirm_req_failed()
+            self.req_failed()
         self.window.refresh_on_next = True
-
+    
     def receive_contours(self):
         print("Receiving contours")
         self.confirm_req()
@@ -508,13 +530,12 @@ class BigTing():
         try:
             clusters = []
             contours = []
-
+            
+            
             for i, cnts in enumerate(message):
                 contours = [*contours, *cnts]
-                clusters = [
-                    *clusters, *list(map(lambda x: self.window.clusters[i].name, cnts))]
-                cv.drawContours(self.window.contour_img, cnts, -1,
-                                self.window.clusters[i].color, 3, cv.LINE_AA)
+                clusters = [*clusters, *list(map(lambda x: self.window.clusters[i].name, cnts))]
+                cv.drawContours(self.window.contour_img, cnts, -1, self.window.clusters[i].color, 3, cv.LINE_AA)
 
             df = MAINFRAME.copy()
             df["Contour"] = contours
@@ -522,13 +543,13 @@ class BigTing():
             df["Selected"] = False
             df["Disabled"] = False
             df["Area"] = df["Contour"].apply(lambda x: cv.contourArea(x))
-            df["Center"] = df["Contour"].apply(lambda x: centroid(x))
+            df["Center_REL"] = df["Contour"].apply(lambda x: centroid(x))
 
             self.window.raw_df = self.window.sample_df = df
             self.window.update_contours()
-            self.confirm_req_complete()
+            self.req_complete()
         except:
-            self.confirm_req_failed()
+            self.req_failed()
         self.window.refresh_on_next = True
 
     def send_contours(self):  # Sending the array of the contours
@@ -680,12 +701,12 @@ class BigTing():
         button3.grid(row=0, column=1, padx=5, pady=2)
         button4.grid(row=1, column=1, padx=5, pady=2)
 
+
         def change_rad(x):
             print(x)
             self.window.radius = x
-
-        self.tk_radius_slider = tk.Scale(controls_frame, from_=5, to=15, length=200,
-                                         orient=tk.HORIZONTAL, label="Radius for new object", command=change_rad)
+            
+        self.tk_radius_slider = tk.Scale(controls_frame, from_=5, to=15, length=200, orient=tk.HORIZONTAL, label="Radius for new object", command=change_rad)
         self.tk_radius_slider.pack(fill="both", expand=True)
 
         def on_closing():
@@ -739,12 +760,10 @@ def circle_contour(center: "tuple(int, int)", radius: int):
     Returns:
         np.ndarray: array of the polygons points 
     """
-    print(f"radius: {radius}")
-    print(f"center: {center}")
     points = []
-    for i in range(0, 360):
+    for i in range(0, 360, 10):
         angle = i * math.pi / 180
-
+        
         x = int(float(center[0]) + float(radius) * math.cos(angle))
         y = int(float(center[1]) + float(radius) * math.sin(angle))
         points.append([x, y])
@@ -755,6 +774,13 @@ def circle_contour(center: "tuple(int, int)", radius: int):
     # Reshape to fit cv2.drawContours input format
     points = points.reshape((-1, 1, 2))
     return points
+
+
+def offset_polygon(polygon: np.ndarray, offset: "tuple(int, int)"):
+    result = []
+    for point in polygon:
+        result.append((point[0] + offset[0], point[1] + offset[1]))
+    return np.array(result)
 
 
 # Output Constants
