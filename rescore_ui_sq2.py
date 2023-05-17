@@ -70,7 +70,6 @@ def create_dist_lib():
         os.mkdir(TODAY_DIR)
 
 
-
 # Start the external process with argument.
 def start_process(inp: qc.ProcessInput, contours: np.ndarray):
     global logfile, external_process, externalprocesspath, pythonPath, context, socket
@@ -84,14 +83,9 @@ def start_process(inp: qc.ProcessInput, contours: np.ndarray):
     logfile.write(f"{datetime.datetime.now()}:\n")
     logfile.flush()
     
-
     socket.setsockopt(zmq.LINGER, 100)
     socket.connect(SERVER_ENDPOINT)
-
-    #external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
-    #external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
-
-    time.sleep(1)
+    time.sleep(0.5)
 
     try:
         communicate("PING")
@@ -100,14 +94,15 @@ def start_process(inp: qc.ProcessInput, contours: np.ndarray):
     finally:
         communicate(INP_IMG)
         communicate(inp.image)
-        time.sleep(0.5)
-        communicate(WIN_SIZE)
-        communicate(inp.ui_values["trackbar"])
-        time.sleep(0.5)
-        communicate(INP_CNTRS)
-        communicate(contours)
+       
         communicate(INP_ORG)
         communicate((inp.tile_info.roi.topleft_x, inp.tile_info.roi.topleft_y))
+        
+        communicate(WIN_SIZE)
+        communicate(inp.ui_values["trackbar"])
+
+        communicate(INP_CNTRS)
+        communicate(contours)
         
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     global context, socket, isPreview, pythonPath, externalprocesspath
@@ -116,8 +111,9 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     
     isPreview = inp.environment.is_preview_segmentation
     pythonPath = inp.environment.python_path
-    # externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
-    externalprocesspath = os.path.dirname(inp.environment.scenario_path) + "\\rescore_ui_pd.py"
+    externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
+    # externalprocesspath = os.path.dirname(inp.environment.scenario_path) + "\\rescore_ui_pd.py"
+    print(externalprocesspath)
 
     context = zmq.Context()
     socket = context.socket(zmq.PAIR)
@@ -136,6 +132,7 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
 
 
 def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
+    global logfile, external_process, externalprocesspath, pythonPath, context, socket
     concentration_maps = COLOUR_DECONVOLUTION.get_concentration(inp.image, normalisation="scale")
     contours = []
     for stain_index, cluster in enumerate(CLUSTERS):
@@ -162,6 +159,10 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
             stain_index, points, custom_data=datetime.datetime.now().strftime("%c"))
     
     if isPreview:
+        external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
+        external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
+        
+        print(externalprocesspath)
         start_process(inp, contours)
 
 
@@ -269,4 +270,3 @@ def predict_contours(
         axis=2
     )
     return contours
- 

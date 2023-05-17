@@ -78,10 +78,8 @@ class ImageWindow():
 
         # INITIALIZE OPENCV WINDOW
         cv.namedWindow(self.name, cv.WINDOW_AUTOSIZE)
-
-        # self.update_contours()
-
         cv.setMouseCallback(self.name, self.mouse_event)
+        # self.update_contours()
 
     def set_base_image(self, img: np.ndarray) -> None:
         """Set new image as reference in the object
@@ -127,10 +125,7 @@ class ImageWindow():
 
         cv.imshow(self.name, im)  # Display image
 
-        # If image is bigger than the desired value in constants,
-        # the window width does not surpass this value
-        if self.og_img.shape[1] > max_width:
-            self.resize_window()
+        self.resize_window()
 
     def resize_window(self):
         """Downsizes the window to the max window width (keeps aspect ratio)
@@ -186,19 +181,7 @@ class ImageWindow():
         if self.edit:
             # DIS-/ENABLEl
             if event == cv.EVENT_LBUTTONUP:
-                if flag != 8:
-                    hit = self.df_polygon_test(point, False)
-                    if hit.empty:
-                        return
-
-                    # Toggle 'Disabled' value
-                    # Get
-                    disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
-                    # Set
-                    self.sample_df.loc[hit.index]["Disabled"] = not disabled_val
-
-                    self.refresh_on_next = True
-                else:  # If ctrl is pressed down, a new entry is created
+                if flag == 8: # If ctrl is pressed down, a new entry is created
                     if VERBOSE:
                         print(f"Adding new object")
 
@@ -208,6 +191,21 @@ class ImageWindow():
                     self.sample_df = self.sample_df.append(
                         row, ignore_index=True)
 
+                    self.refresh_on_next = True
+
+                elif flag == 0:
+                    hit = self.df_polygon_test(point, False)
+                    if hit.empty:
+                        return
+                    
+                    print("EVENT")
+                    print(self.sample_df.loc[hit.index])
+
+                    # Toggle 'Disabled' value
+                    disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
+                    self.sample_df.loc[hit.index, "Disabled"] = not disabled_val
+
+                    print(self.sample_df.loc[hit.index])
                     self.refresh_on_next = True
 
             # RESCORE/DELETE OBJECT
@@ -320,23 +318,28 @@ class ImageWindow():
                 print(f"Extracting unmodified data")
 
             df = self.raw_df.copy()
-            df["Center_ABS"] = df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            df["Center"] = df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
             df.to_csv(data_destination_path_raw() + ".csv")
+            df["Contour"] = df["Contour"].apply(lambda x: offset_polygon(x, self.origin))
+            df = df.drop(columns=["Center_REL", "Selected"])
 
         else:
             if VERBOSE:
                 print(f"Extracting modified data")
 
             r_df = self.raw_df.copy()
-            r_df["Center_ABS"] = r_df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            r_df["Center"] = r_df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            r_df["Contour"] = r_df["Contour"].apply(lambda x: offset_polygon(x, self.origin))
+            r_df = r_df.drop(columns=["Center_REL", "Selected"])
+            
             s_df = self.raw_df.copy()
-            s_df["Center_ABS"] = s_df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            s_df["Center"] = s_df["Center_REL"].apply(lambda x: (x[0] + self.origin[0], x[1] + self.origin[1]))
+            s_df["Contour"] = s_df["Contour"].apply(lambda x: offset_polygon(x, self.origin))
+            s_df = s_df.drop(columns=["Center_REL", "Selected"])
 
             r_df.to_csv(data_destination_path_raw() + ".csv")
             s_df.to_csv(data_destination_path_supervised() + ".csv")
-            
-            print(r_df)
-            print(s_df)
+    
 
     def extract_stats(self):
         """Extracts the summarized stats and saves it into destination file
@@ -399,7 +402,7 @@ class ImageWindow():
 
             for i in range(len_diff):  # Fill with empty rows
                 filled_raw = filled_raw.append(
-                    pd.Series([None]*len(filled_raw.columns), index=filled_raw.columns),
+                    pd.Series([None] * len(filled_raw.columns), index=filled_raw.columns),
                     ignore_index=True
                 )
 
@@ -411,7 +414,8 @@ class ImageWindow():
 
         else:
             diff = self.raw_df.compare(self.sample_df)
-        print(diff)
+            print(self.raw_df["Disabled"].value_counts())
+            print(self.sample_df["Disabled"].value_counts())
         return diff
 
     def extract_selected(self) -> pd.DataFrame:
@@ -545,7 +549,9 @@ class BigTing():
             df["Area"] = df["Contour"].apply(lambda x: cv.contourArea(x))
             df["Center_REL"] = df["Contour"].apply(lambda x: centroid(x))
 
-            self.window.raw_df = self.window.sample_df = df
+            self.window.raw_df = pd.DataFrame(df, copy=True)
+            self.window.sample_df = df
+             
             self.window.update_contours()
             self.req_complete()
         except:
@@ -637,7 +643,7 @@ class BigTing():
         text_frame = tk.Frame(root)
         text_frame.pack(side="left", fill="both", padx=12, pady=12)
 
-        text = tk.Text(text_frame, font=("Helvetica", 16), width=20, height=8)
+        text = tk.Text(text_frame, font=("Helvetica", 16), width=24, height=8)
 
         text.config(state=tk.NORMAL)
         text.insert(tk.END, self.window.extract_stats().to_string())
@@ -703,7 +709,6 @@ class BigTing():
 
 
         def change_rad(x):
-            print(x)
             self.window.radius = x
             
         self.tk_radius_slider = tk.Scale(controls_frame, from_=5, to=15, length=200, orient=tk.HORIZONTAL, label="Radius for new object", command=change_rad)
@@ -728,10 +733,12 @@ class BigTing():
         # simulate continue on with other things
         await task1
         await task2
+        return
 
     def run(self):
         asyncio.run(self.main())
         self.context.destroy()
+        self.tk.quit()
         cv.destroyAllWindows()
 
 
@@ -792,8 +799,7 @@ TODAY_DIR = os.path.join(OUTPUT_DIR, TODAY)
 # Dynamic functions for saving results
 def now(): return datetime.now().strftime("%H-%M")
 def data_destination_path_raw(): return f"{TODAY_DIR}/{now()}_raw-data"
-def data_destination_path_supervised(
-): return f"{TODAY_DIR}/{now()}_supervised-data"
+def data_destination_path_supervised(): return f"{TODAY_DIR}/{now()}_supervised-data"
 def stats_destination_path(): return f"{TODAY_DIR}/{now()}_stats"
 
 
