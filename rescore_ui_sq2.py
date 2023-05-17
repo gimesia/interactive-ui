@@ -160,9 +160,8 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
     
     if isPreview:
         external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
-        external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NO_WINDOW)
-        
-        print(externalprocesspath)
+        external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NEW_CONSOLE)
+
         start_process(inp, contours)
 
 

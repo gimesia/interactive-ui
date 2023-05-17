@@ -130,8 +130,13 @@ class ImageWindow():
     def resize_window(self):
         """Downsizes the window to the max window width (keeps aspect ratio)
         """
+        global max_width
+
         sh = self.og_img.shape
         aspect_ratio = sh[0] / sh[1]
+
+        if max_width > sh[1]:
+            max_width = sh[1]
 
         cv.resizeWindow(self.name, max_width,
                         int(max_width * aspect_ratio))
