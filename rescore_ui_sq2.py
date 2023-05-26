@@ -42,11 +42,11 @@ WIN_SIZE = "WINDOW_SIZE"
 
 context = None
 socket = None
-externalprocesspath = None
+external_process_path = None
 external_process = None
 logfile = None
-isPreview = False
-pythonPath = ""
+is_preview = False
+python_path = ""
 
 # Output Constants
 OUTPUT_DIR = os.path.join(str(Path.home() / "Downloads"), "rescore_ui_output")
@@ -72,7 +72,7 @@ def create_dist_lib():
 
 # Start the external process with argument.
 def start_process(inp: qc.ProcessInput, contours: np.ndarray):
-    global logfile, external_process, externalprocesspath, pythonPath, context, socket
+    global logfile, external_process, external_process_path, python_path, context, socket
     
     create_dist_lib()
     
@@ -105,15 +105,16 @@ def start_process(inp: qc.ProcessInput, contours: np.ndarray):
         communicate(contours)
         
 def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
-    global context, socket, isPreview, pythonPath, externalprocesspath
+    global context, socket, is_preview, python_path, external_process_path
     
     out.ui.add_trackbar("trackbar", "Window width", 1080, 1928, 1600, 212)
     
-    isPreview = inp.environment.is_preview_segmentation
-    pythonPath = inp.environment.python_path
-    externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
-    # externalprocesspath = os.path.dirname(inp.environment.scenario_path) + "\\rescore_ui_pd.py"
-    print(externalprocesspath)
+    is_preview = inp.environment.is_preview_segmentation
+    python_path = inp.environment.python_path
+    
+    # externalprocesspath = OUTPUT_DIR + "\\rescore_ui_pd.py"
+    external_process_path = os.path.dirname(inp.environment.scenario_path) + "\\rescore_ui_pd.py"
+    print(external_process_path)
 
     context = zmq.Context()
     socket = context.socket(zmq.PAIR)
@@ -127,12 +128,16 @@ def initialize(inp: qc.InitializeInput, out: qc.InitializeOutput):
     out.processing.tile_size = 1024
     out.processing.tile_border_size = 128
     out.processing.zoom = 2.5
-    isPreview = inp.environment.is_preview_segmentation
+    is_preview = inp.environment.is_preview_segmentation
     
+
+def start_subprocess():
+    external_process_start_command = [python_path + "\\python.exe", external_process_path, str(is_preview)]
+    external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NEW_CONSOLE)    
 
 
 def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
-    global logfile, external_process, externalprocesspath, pythonPath, context, socket
+    global logfile, external_process, external_process_path, python_path, context, socket
     concentration_maps = COLOUR_DECONVOLUTION.get_concentration(inp.image, normalisation="scale")
     contours = []
     for stain_index, cluster in enumerate(CLUSTERS):
@@ -158,9 +163,9 @@ def process_tile(inp: qc.ProcessInput, out: qc.ProcessOutput):
             out.results.add_polygon(
             stain_index, points, custom_data=datetime.datetime.now().strftime("%c"))
     
-    if isPreview:
-        external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
-        external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    if is_preview:
+        # external_process_start_command = [pythonPath + "\\python.exe", externalprocesspath, str(isPreview)]
+        # external_process = subprocess.Popen(external_process_start_command, stderr=logfile, creationflags=subprocess.CREATE_NEW_CONSOLE)
 
         start_process(inp, contours)
 
@@ -174,8 +179,13 @@ def deinitialize():
         logfile.close()
     if external_process is not None:
         external_process.terminate()
+        print("terminate")
+        external_process.kill()
+        external_process = None
+    
     socket.close()
     context.term()
+    quit()
 
 # Communicate with the external process via zmq.
 # If the communication fails due to the external process is not responding, this function closes the connection and empties the message queue, and

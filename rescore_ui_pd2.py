@@ -131,13 +131,13 @@ class ImageWindow():
         """Downsizes the window to the max window width (keeps aspect ratio)
         """
         global max_width
-
+        
         sh = self.og_img.shape
         aspect_ratio = sh[0] / sh[1]
-
+        
         if max_width > sh[1]:
             max_width = sh[1]
-
+        
         cv.resizeWindow(self.name, max_width,
                         int(max_width * aspect_ratio))
 
@@ -151,11 +151,6 @@ class ImageWindow():
             row = i[1]
             cluster_names = list(map(lambda x: x.name, clusters))
 
-            # print(f"{row['Cluster']}")
-            # print(f"{cluster_names}")
-            # print(f"{cluster_names.index(row['Cluster'])}")
-            # print(f"{clusters[cluster_names.index(row['Cluster'])]}")
-
             if not clusters[cluster_names.index(row["Cluster"])].enabled:
                 continue
 
@@ -166,8 +161,6 @@ class ImageWindow():
             else:
                 color = clusters[cluster_names.index(row["Cluster"])].color
                 
-            # print(color)
-            
             cv.drawContours(im, [row["Contour"]], -1, color, 1, cv.LINE_AA)
         self.contour_img = im
         self.show_img()
@@ -203,14 +196,14 @@ class ImageWindow():
                     if hit.empty:
                         return
                     
-                    print("EVENT")
-                    print(self.sample_df.loc[hit.index])
+                    if VERBOSE:
+                        print("EVENT")
+                        print(self.sample_df.loc[hit.index])
 
                     # Toggle 'Disabled' value
                     disabled_val = self.sample_df.loc[hit.index].iloc[0]["Disabled"]
                     self.sample_df.loc[hit.index, "Disabled"] = not disabled_val
 
-                    print(self.sample_df.loc[hit.index])
                     self.refresh_on_next = True
 
             # RESCORE/DELETE OBJECT
@@ -419,8 +412,6 @@ class ImageWindow():
 
         else:
             diff = self.raw_df.compare(self.sample_df)
-            print(self.raw_df["Disabled"].value_counts())
-            print(self.sample_df["Disabled"].value_counts())
         return diff
 
     def extract_selected(self) -> pd.DataFrame:
@@ -571,9 +562,6 @@ class BigTing():
         contours = [df[df["Cluster"] == c]["Contour"] for c in cl]
         self.socket.send_pyobj(contours)
 
-        if VERBOSE:
-            print(contours)
-
     async def coroutine_zmq(self):
         """ZeroMQ communication async coroutine"""
         print("ZMQ Coroutine is running")
@@ -685,11 +673,15 @@ class BigTing():
                 self.window.clusters[i].enabled = val
             self.window.refresh_on_next = True
 
-        checkbox_vals = {i.name: tk.BooleanVar(
-            value=True) for i in self.window.clusters}
+        checkbox_vals = {i.name: tk.BooleanVar(value=True) for i in self.window.clusters}
         checkboxes = {
             i: tk.Checkbutton(
-                controls_frame, text=i, variable=checkbox_vals[i], onvalue=True, offvalue=False, command=update_checkboxes
+                controls_frame,
+                text=i,
+                variable=checkbox_vals[i],
+                onvalue=True,
+                offvalue=False,
+                command=update_checkboxes
             ) for i in checkbox_vals.keys()
         }
 
